@@ -1,7 +1,7 @@
 const ASTM_CHANNELS = {
     'pico-ch-01': { label: 'Blank', role: 'Background reference', colorVar: '--blank' },
     'pico-ch-02': { label: 'Snickers', role: 'Positive control', colorVar: '--cellulose', hidden: true },
-    'pico-ch-03': { label: 'Sample', role: 'Test material', colorVar: '--sample' },
+    'pico-ch-03': { label: 'PPG-based polyurethane', role: 'Test material', colorVar: '--sample' },
 };
 
 const ALERT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between repeat notifications
