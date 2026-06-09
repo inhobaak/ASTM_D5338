@@ -217,6 +217,7 @@ function initCharts() {
         maintainAspectRatio: false,
         animation: false,
         spanGaps: false,
+        layout: { padding: { top: 4, right: 8, bottom: 4, left: 4 } },
         scales: {
             x: {
                 type: 'time',
