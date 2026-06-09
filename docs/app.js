@@ -8,7 +8,7 @@ const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 const alertLastFired = {};
 const ALERT_LOG_MAX = 50;
 
-let supabaseClient;
+let supabaseClien
 let charts = {};
 let channelColors = {};
 let alertRules = [];
@@ -223,6 +223,7 @@ function initCharts() {
                 type: 'time',
                 ticks: {
                     color: chartToken('--text-muted'),
+                    font: { size: 13 },
                     maxTicksLimit: 8,
                     autoSkipPadding: 16,
                     callback: function(v, i, ticks) {
@@ -236,12 +237,12 @@ function initCharts() {
                 grid: { color: chartToken('--border') },
             },
             y: {
-                ticks: { color: chartToken('--text-muted') },
+                ticks: { color: chartToken('--text-muted') }, font: { size: 13 },
                 grid: { color: chartToken('--border') },
             },
         },
         plugins: {
-            legend: { labels: { color: chartToken('--text'), boxWidth: 12 } },
+            legend: { labels: { color: chartToken('--text'), boxWidth: 14, font: { size: 14, weight: '600' }, padding: 14, }, },
             tooltip: { callbacks: { title: fmtTooltip } },
         },
     };
