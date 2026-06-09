@@ -160,7 +160,7 @@ function buildChannelCard(ch) {
         </div>
         <div class="metric-row">
             <span class="metric-label">Temperature</span>
-            <span class="metric-value">${temp} deg C</span>
+            <span class="metric-value">${temp} °C</span>
         </div>
         <div class="metric-row">
             <span class="metric-label">Humidity</span>
@@ -179,7 +179,7 @@ function updateChannelCard(r) {
     card.className = `channel-card online`;
 
     card.querySelector('.co2-val').textContent = `${Number(r.co2_ppm).toFixed(0)} ppm`;
-    card.querySelectorAll('.metric-value')[1].textContent = `${Number(r.temp_c).toFixed(1)} deg C`;
+    card.querySelectorAll('.metric-value')[1].textContent = `${Number(r.temp_c).toFixed(1)} °C`;
     card.querySelectorAll('.metric-value')[2].textContent = `${Number(r.humidity_rh).toFixed(1)} %`;
     card.querySelector('.last-seen').textContent = `Last: just now`;
 }
