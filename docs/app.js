@@ -242,8 +242,8 @@ function initCharts() {
             },
         },
         plugins: {
-            legend: { labels: { color: chartToken('--text'), boxWidth: 14, font: { size: 14, weight: '600' }, padding: 14, }, },
-            tooltip: { callbacks: { title: fmtTooltip }, titleFont: { size: 13 }, bodyFont: { size: 13 } },
+            legend: { position: 'top', align: 'center', labels: { color: chartToken('--text'), boxWidth: 14, font: { size: 14, weight: '600' }, padding: 14, }, },
+            tooltip: { callbacks: { title: fmtTooltip }, titleFont: { size: 15 }, bodyFont: { size: 15 } },
         },
     };
 
