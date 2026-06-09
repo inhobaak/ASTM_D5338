@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D5338 · CO₂ Monitor</title>
+    <link rel="stylesheet" href="style.css">
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <script src="config.js"></script>
+</head>
+<body>
+
+<header>
+    <div class="header-copy">
+        <p class="eyebrow">ASTM D5338</p>
+        <h1>CO<sub>2</sub> evolution</h1>
+        <p class="subtitle">Live CO<sub>2</sub>, temperature, and humidity across three vessels.</p>
+    </div>
+    <div class="time-range-selector">
+        <button class="active" data-range="24h">24h</button>
+        <button data-range="7d">7d</button>
+    </div>
+</header>
+
+<div class="alert-banner" id="alert-banner"></div>
+
+<main>
+    <section class="overview-panel">
+        <div>
+            <p class="section-title">Setup</p>
+            <h2>Blank · Control · Sample</h2>
+        </div>
+        <p>Background reference, Jack's candy as the positive control, and PPG-based polyurethane as the test material.</p>
+    </section>
+
+    <div class="channel-cards" id="channel-cards">
+        <p class="loading-state">Loading…</p>
+    </div>
+
+    <div class="charts">
+        <div class="chart-container chart-container-primary">
+            <h3>CO<sub>2</sub> (ppm)</h3>
+            <canvas id="chart-co2"></canvas>
+        </div>
+        <div class="chart-container">
+            <h3>Temperature (°C)</h3>
+            <canvas id="chart-temp"></canvas>
+        </div>
+        <div class="chart-container">
+            <h3>Humidity (%)</h3>
+            <canvas id="chart-humidity"></canvas>
+        </div>
+    </div>
+
+    <div class="alert-log" id="alert-log">
+        <h3>Alerts</h3>
+        <p class="no-alerts">No alerts yet.</p>
+    </div>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
