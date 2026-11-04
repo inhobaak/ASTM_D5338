@@ -1,29 +1,49 @@
+// Keys are the channel names the Pico writes as column prefixes
+// (CHANNELS in its settings.toml: "blank:0,control:1,sample:2").
 const ASTM_CHANNELS = {
-    'pico-ch-01': { label: 'Blank', role: 'Background reference', colorVar: '--blank' },
-    'pico-ch-02': { label: "Jack's candy", role: 'Positive control', colorVar: '--positive' },
-    'pico-ch-03': { label: 'PPG-based polyurethane', role: 'Test material', colorVar: '--sample' },
+    blank:   { label: 'Blank', role: 'Background reference', colorVar: '--blank' },
+    control: { label: "Jack's candy", role: 'Positive control', colorVar: '--positive' },
+    sample:  { label: 'PPG-based polyurethane', role: 'Test material', colorVar: '--sample' },
 };
+
+// Alerts shown while this page is open, for example
+//   { channel_id: 'sample', metric: 'temp_c', direction: 'below', threshold: 55 }
+// metric is co2_ppm, temp_c or humidity_rh; leave out channel_id to watch all.
+const ALERT_RULES = [];
+
+// step = seconds per averaged point (0 = every 30 s row)
+const RANGES = {
+    '24h': { hours: 24,  step: 0 },
+    '7d':  { hours: 168, step: 300 },
+    '30d': { hours: 720, step: 1800 },
+};
+
+// Rows reach the sheet in 2-minute batches, so allow for that before
+// calling a channel stale or offline.
+const STALE_MINUTES = 5;
+const OFFLINE_MINUTES = 15;
 
 const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 const alertLastFired = {};
 const ALERT_LOG_MAX = 50;
 
-let supabaseClien
 let charts = {};
 let channelColors = {};
-let alertRules = [];
 let channelData = {};
+let columnIndex = {};      // channel -> positions of its values in a row
+let columnsKey = '';
+let lastUtc = null;
 let selectedRange = '24h';
 let alertBannerTimeout;
 
 document.addEventListener('DOMContentLoaded', async () => {
-    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
     initCharts();
-    await loadAlertRules();
-    await loadChannels();
+    if (!SHEETS_URL) {
+        showStatus('Set SHEETS_URL in config.js to the Apps Script /exec URL.');
+        return;
+    }
     await loadHistoricalData();
-    subscribeRealtime();
+    setInterval(pollNewRows, REFRESH_SECONDS * 1000);
     startOfflineCheck();
 
     document.querySelectorAll('.time-range-selector button').forEach(btn => {
@@ -36,121 +56,165 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
-    if ('Notification' in window && Notification.permission === 'default') {
+    if (ALERT_RULES.length && 'Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission();
     }
 });
 
-async function loadAlertRules() {
-    const { data } = await supabaseClient
-        .from('alert_rules')
-        .select('*')
-        .eq('is_active', true);
-    if (data) alertRules = data;
+async function fetchSheet(params) {
+    const res = await fetch(`${SHEETS_URL}?${new URLSearchParams(params)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'request failed');
+    return data;
 }
 
-async function loadChannels() {
-    const { data } = await supabaseClient
-        .from('channel_status')
-        .select('*');
-    if (!data) return;
+// "blank_co2_ppm", "blank_temp_c", "blank_rh", ... -> { blank: { co2: 1, temp: 2, rh: 3 }, ... }
+// (positions are into a row, where row[0] is the utc time)
+function indexColumns(columns) {
+    const index = {};
+    const suffixes = { _co2_ppm: 'co2', _temp_c: 'temp', _rh: 'rh' };
+    columns.forEach((col, i) => {
+        Object.entries(suffixes).forEach(([suffix, key]) => {
+            if (col.endsWith(suffix)) {
+                const name = col.slice(0, -suffix.length);
+                (index[name] = index[name] || {})[key] = i + 1;
+            }
+        });
+    });
+    return index;
+}
 
-    const container = document.getElementById('channel-cards');
-    container.innerHTML = '';
+function toReading(row, channelId) {
+    const idx = columnIndex[channelId];
+    return {
+        channel_id: channelId,
+        recorded_at: row[0],
+        co2_ppm: row[idx.co2],
+        temp_c: row[idx.temp],
+        humidity_rh: row[idx.rh],
+    };
+}
 
-    data.forEach((ch, i) => {
-        channelColors[ch.channel_id] = getChannelColor(ch.channel_id, i);
-        channelData[ch.channel_id] = { co2: [], temp: [], humidity: [] };
-        if (isHidden(ch.channel_id)) return;
-        container.appendChild(buildChannelCard(ch));
+function addPoints(row) {
+    const t = new Date(row[0]);
+    Object.keys(columnIndex).forEach(chId => {
+        if (isHidden(chId)) return;
+        const r = toReading(row, chId);
+        channelData[chId].co2.push({ x: t, y: r.co2_ppm });
+        channelData[chId].temp.push({ x: t, y: r.temp_c });
+        channelData[chId].humidity.push({ x: t, y: r.humidity_rh });
     });
 }
 
 async function loadHistoricalData() {
-    const now = new Date();
-    const since = selectedRange === '7d'
-        ? new Date(now - 7 * 24 * 3600 * 1000).toISOString()
-        : new Date(now - 24 * 3600 * 1000).toISOString();
+    const range = RANGES[selectedRange];
+    let data;
+    try {
+        data = await fetchSheet({ hours: range.hours, step: range.step });
+    } catch (err) {
+        showStatus(`Couldn't load data from Google Sheets (${err.message}).`);
+        return;
+    }
 
-    const { data } = await supabaseClient
-        .from('readings')
-        .select('channel_id, co2_ppm, temp_c, humidity_rh, recorded_at')
-        .gte('recorded_at', since)
-        .order('recorded_at', { ascending: true })
-        .range(0, 49999);
-
-    if (!data) return;
-
-    Object.values(channelData).forEach(d => {
-        d.co2 = []; d.temp = []; d.humidity = [];
+    columnIndex = indexColumns(data.columns);
+    columnsKey = data.columns.join(',');
+    channelData = {};
+    Object.keys(columnIndex).forEach((chId, i) => {
+        channelColors[chId] = getChannelColor(chId, i);
+        channelData[chId] = { co2: [], temp: [], humidity: [] };
     });
 
-    const rows = selectedRange === '7d' ? downsample5min(data) : data;
-
-    rows.forEach(r => {
-        if (!channelData[r.channel_id]) return;
-        if (isHidden(r.channel_id)) return;
-        const t = new Date(r.recorded_at);
-        channelData[r.channel_id].co2.push({ x: t, y: r.co2_ppm });
-        channelData[r.channel_id].temp.push({ x: t, y: r.temp_c });
-        channelData[r.channel_id].humidity.push({ x: t, y: r.humidity_rh });
-    });
-
+    data.rows.forEach(addPoints);
+    lastUtc = data.latest ? data.latest[0] : null;
+    renderCards(data.latest);
     rebuildChartDatasets();
 }
 
-function subscribeRealtime() {
-    supabaseClient
-        .channel('readings-live')
-        .on('postgres_changes',
-            { event: 'INSERT', schema: 'public', table: 'readings' },
-            payload => handleNewReading(payload.new)
-        )
-        .subscribe();
+async function pollNewRows() {
+    if (!lastUtc) return loadHistoricalData();
+    let data;
+    try {
+        data = await fetchSheet({ since: lastUtc });
+    } catch (err) {
+        return;   // keep showing what we have; the next poll tries again
+    }
+    if (data.columns.join(',') !== columnsKey) return loadHistoricalData();  // channels changed
+    if (!data.rows.length) return;
+
+    data.rows.forEach(row => {
+        addPoints(row);
+        Object.keys(columnIndex).forEach(chId => {
+            if (isHidden(chId)) return;
+            const r = toReading(row, chId);
+            updateChannelCard(r);
+            checkAlertThresholds(r);
+        });
+    });
+    lastUtc = data.rows[data.rows.length - 1][0];
+
+    const cutoff = Date.now() - RANGES[selectedRange].hours * 3600 * 1000;
+    Object.keys(channelData).forEach(chId => {
+        ['co2', 'temp', 'humidity'].forEach(k => {
+            channelData[chId][k] = channelData[chId][k].filter(p => p.x.getTime() >= cutoff);
+        });
+        updateChartDataset(chId);
+    });
 }
 
-function handleNewReading(r) {
-    if (!channelData[r.channel_id]) return;
-    if (isHidden(r.channel_id)) return;
+function showStatus(msg) {
+    const container = document.getElementById('channel-cards');
+    container.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'loading-state';
+    p.textContent = msg;
+    container.appendChild(p);
+}
 
-    const t = new Date(r.recorded_at);
-    channelData[r.channel_id].co2.push({ x: t, y: r.co2_ppm });
-    channelData[r.channel_id].temp.push({ x: t, y: r.temp_c });
-    channelData[r.channel_id].humidity.push({ x: t, y: r.humidity_rh });
-
-    const cutoff = selectedRange === '7d'
-        ? Date.now() - 7 * 24 * 3600 * 1000
-        : Date.now() - 24 * 3600 * 1000;
-    ['co2', 'temp', 'humidity'].forEach(k => {
-        channelData[r.channel_id][k] = channelData[r.channel_id][k]
-            .filter(p => p.x.getTime() >= cutoff);
+function renderCards(latest) {
+    const container = document.getElementById('channel-cards');
+    container.innerHTML = '';
+    const ids = Object.keys(columnIndex).filter(chId => !isHidden(chId));
+    if (!ids.length) {
+        showStatus('No data in the sheet yet.');
+        return;
+    }
+    ids.forEach(chId => {
+        const r = latest ? toReading(latest, chId) : {};
+        container.appendChild(buildChannelCard({
+            channel_id: chId,
+            status: statusFor(r.recorded_at),
+            last_reading_at: r.recorded_at,
+            last_co2_ppm: r.co2_ppm,
+            last_temp_c: r.temp_c,
+            last_humidity_rh: r.humidity_rh,
+        }));
     });
+}
 
-    updateChartDataset(r.channel_id);
-    updateChannelCard(r);
-    checkAlertThresholds(r);
+function statusFor(recordedAt) {
+    if (!recordedAt) return 'offline';
+    const ageMins = (Date.now() - new Date(recordedAt).getTime()) / 60000;
+    return ageMins > OFFLINE_MINUTES ? 'offline' : ageMins > STALE_MINUTES ? 'stale' : 'online';
 }
 
 function buildChannelCard(ch) {
     const div = document.createElement('div');
     div.className = `channel-card ${escHtml(ch.status || 'offline')}`;
-    div.id = `card-${CSS.escape(ch.channel_id)}`;
+    div.id = `card-${ch.channel_id}`;
     div.dataset.lastSeen = ch.last_reading_at || '';
-    div.dataset.role = getChannelLabel(ch);
 
     const co2 = ch.last_co2_ppm != null ? ch.last_co2_ppm.toFixed(0) : '-';
     const temp = ch.last_temp_c != null ? ch.last_temp_c.toFixed(1) : '-';
     const hum = ch.last_humidity_rh != null ? ch.last_humidity_rh.toFixed(1) : '-';
     const lastSeen = ch.last_reading_at ? timeAgo(new Date(ch.last_reading_at)) : 'never';
-    const channelLabel = getChannelLabel(ch);
-    const channelRole = getChannelRole(ch.channel_id);
 
     div.innerHTML = `
         <div class="card-header">
             <div>
-                <div class="card-role">${escHtml(channelRole)}</div>
-                <div class="card-name">${escHtml(channelLabel)}</div>
-                <div class="card-location">${escHtml(ch.location || ch.channel_id)}</div>
+                <div class="card-role">${escHtml(getChannelRole(ch.channel_id))}</div>
+                <div class="card-name">${escHtml(getChannelLabel(ch))}</div>
+                <div class="card-location">${escHtml(ch.channel_id)}</div>
             </div>
             <div class="status-dot"></div>
         </div>
@@ -176,12 +240,13 @@ function updateChannelCard(r) {
     if (!card) return;
 
     card.dataset.lastSeen = r.recorded_at;
-    card.className = `channel-card online`;
+    card.className = `channel-card ${statusFor(r.recorded_at)}`;
 
-    card.querySelector('.co2-val').textContent = `${Number(r.co2_ppm).toFixed(0)} ppm`;
-    card.querySelectorAll('.metric-value')[1].textContent = `${Number(r.temp_c).toFixed(1)} °C`;
-    card.querySelectorAll('.metric-value')[2].textContent = `${Number(r.humidity_rh).toFixed(1)} %`;
-    card.querySelector('.last-seen').textContent = `Last: just now`;
+    const values = card.querySelectorAll('.metric-value');
+    values[0].textContent = r.co2_ppm != null ? `${Number(r.co2_ppm).toFixed(0)} ppm` : '- ppm';
+    values[1].textContent = r.temp_c != null ? `${Number(r.temp_c).toFixed(1)} °C` : '- °C';
+    values[2].textContent = r.humidity_rh != null ? `${Number(r.humidity_rh).toFixed(1)} %` : '- %';
+    card.querySelector('.last-seen').textContent = `Last: ${timeAgo(new Date(r.recorded_at))}`;
 }
 
 function startOfflineCheck() {
@@ -189,17 +254,39 @@ function startOfflineCheck() {
         document.querySelectorAll('.channel-card').forEach(card => {
             const lastSeen = card.dataset.lastSeen;
             if (!lastSeen) return;
-            const ageMs = Date.now() - new Date(lastSeen).getTime();
-            const ageMins = ageMs / 60000;
-            if (ageMins > 10) {
-                card.className = 'channel-card offline';
-                card.querySelector('.last-seen').textContent =
-                    `Last: ${timeAgo(new Date(lastSeen))}`;
-            } else if (ageMins > 2) {
-                card.className = 'channel-card stale';
-            }
+            card.className = `channel-card ${statusFor(lastSeen)}`;
+            card.querySelector('.last-seen').textContent = `Last: ${timeAgo(new Date(lastSeen))}`;
         });
     }, 60000);
+}
+
+function checkAlertThresholds(r) {
+    ALERT_RULES.forEach((rule, i) => {
+        if (rule.channel_id && rule.channel_id !== r.channel_id) return;
+        const value = rule.metric === 'co2_ppm' ? r.co2_ppm
+                    : rule.metric === 'temp_c' ? r.temp_c
+                    : r.humidity_rh;
+        if (value == null) return;
+
+        const triggered = rule.direction === 'above'
+            ? value > rule.threshold
+            : value < rule.threshold;
+
+        if (!triggered) return;
+
+        const cooldownKey = `${i}|${r.channel_id}`;
+        const now = Date.now();
+        if (alertLastFired[cooldownKey] && now - alertLastFired[cooldownKey] < ALERT_COOLDOWN_MS) return;
+        alertLastFired[cooldownKey] = now;
+
+        const msg = `${getChannelLabel({ channel_id: r.channel_id })}: ${rule.metric} = ${value.toFixed(1)} (${rule.direction} ${rule.threshold})`;
+        showAlertBanner(msg);
+        addAlertLogEntry(msg);
+
+        if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('ASTM D5338 CO₂ Alert', { body: msg });
+        }
+    });
 }
 
 function initCharts() {
@@ -298,35 +385,6 @@ function updateChartDataset(channelId) {
     });
 }
 
-function checkAlertThresholds(r) {
-    alertRules.forEach(rule => {
-        if (rule.channel_id && rule.channel_id !== r.channel_id) return;
-        const value = rule.metric === 'co2_ppm' ? r.co2_ppm
-                    : rule.metric === 'temp_c' ? r.temp_c
-                    : r.humidity_rh;
-        if (value == null) return;
-
-        const triggered = rule.direction === 'above'
-            ? value > rule.threshold
-            : value < rule.threshold;
-
-        if (!triggered) return;
-
-        const cooldownKey = `${rule.id}|${r.channel_id}`;
-        const now = Date.now();
-        if (alertLastFired[cooldownKey] && now - alertLastFired[cooldownKey] < ALERT_COOLDOWN_MS) return;
-        alertLastFired[cooldownKey] = now;
-
-        const msg = `${getChannelLabel({ channel_id: r.channel_id })}: ${rule.metric} = ${value.toFixed(1)} (${rule.direction} ${rule.threshold})`;
-        showAlertBanner(msg);
-        addAlertLogEntry(msg);
-
-        if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('ASTM D5338 CO₂ Alert', { body: msg });
-        }
-    });
-}
-
 function showAlertBanner(msg) {
     const banner = document.getElementById('alert-banner');
     banner.textContent = `Alert: ${msg}`;
@@ -352,29 +410,6 @@ function addAlertLogEntry(msg) {
     if (entries.length > ALERT_LOG_MAX) {
         entries[0].remove();
     }
-}
-
-function downsample5min(rows) {
-    const buckets = {};
-    rows.forEach(r => {
-        const t = new Date(r.recorded_at);
-        const bucket = Math.floor(t.getTime() / (5 * 60 * 1000)) * 5 * 60 * 1000;
-        const key = `${r.channel_id}|${bucket}`;
-        if (!buckets[key]) {
-            buckets[key] = { ...r, recorded_at: new Date(bucket).toISOString(), _n: 0,
-                co2_ppm: 0, temp_c: 0, humidity_rh: 0 };
-        }
-        buckets[key].co2_ppm += r.co2_ppm;
-        buckets[key].temp_c += r.temp_c;
-        buckets[key].humidity_rh += r.humidity_rh;
-        buckets[key]._n += 1;
-    });
-    return Object.values(buckets).map(b => ({
-        ...b,
-        co2_ppm: b.co2_ppm / b._n,
-        temp_c: b.temp_c / b._n,
-        humidity_rh: b.humidity_rh / b._n,
-    })).sort((a, b) => a.recorded_at.localeCompare(b.recorded_at));
 }
 
 function isHidden(channelId) {
