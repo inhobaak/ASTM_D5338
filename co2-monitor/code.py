@@ -297,6 +297,18 @@ def sync_ntp():
         print("NTP failed:", e)
 
 pending = []
+upload_failures = 0   # consecutive upload passes that raised a network error
+
+def reset_wifi():
+    """Drop every socket and power-cycle the radio. After a while the Pico W
+    can get stuck failing every connection (ECONNABORTED) until this is done."""
+    global _next_wifi_try
+    print("Resetting Wi-Fi after", upload_failures, "failed uploads")
+    adafruit_connection_manager.connection_manager_close_all(pool)
+    wifi.radio.enabled = False
+    time.sleep(1)
+    wifi.radio.enabled = True
+    _next_wifi_try = 0          # reconnect on the next upload pass
 
 def upload_batch():
     """Send up to BATCH_MAX pending rows. Returns True if the sheet accepted them."""
@@ -331,14 +343,17 @@ def upload():
         sync_ntp()      # HTTPS certificates can't be checked while the clock reads 2000
         if not time_synced():
             return False
+    global upload_failures
     gc.collect()
     try:
         for _ in range(3):               # catch up at most 3 batches per pass
             if not pending or not upload_batch():
                 break
+        upload_failures = 0
         return not pending
     except Exception as e:
-        print("Upload error:", e, "| free RAM", gc.mem_free())
+        upload_failures += 1
+        print("Upload error:", e, "| free RAM", gc.mem_free(), "| failures", upload_failures)
         return False
     finally:
         # Google drops idle connections long before the next upload, and two
@@ -377,6 +392,12 @@ def main():
                 blink(1, 400)
             elif SHEETS_URL:
                 blink(2, 100, 100)
+                # Network errors: reset Wi-Fi after 2 and 4 failed passes; if
+                # it still fails, restart code.py (rows already on SD are kept)
+                if upload_failures >= 6:
+                    raise RuntimeError("uploads failed %d times in a row" % upload_failures)
+                if upload_failures in (2, 4):
+                    reset_wifi()
 
         time.sleep(0.5)
 
