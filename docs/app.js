@@ -334,7 +334,7 @@ function initCharts() {
             },
         },
         plugins: {
-            legend: { position: 'top', align: 'center', labels: { color: chartToken('--text'), boxWidth: 14, font: { family: FONT, size: 14, weight: '600' }, padding: 14, }, },
+            legend: { position: 'top', align: 'center', labels: { color: chartToken('--text'), boxWidth: 14, font: { family: FONT, size: 14, weight: 'normal' }, padding: 14, }, },
             tooltip: { callbacks: { title: fmtTooltip }, titleFont: { family: FONT, size: 15 }, bodyFont: { family: FONT, size: 15 } },
         },
     };
