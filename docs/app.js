@@ -3,7 +3,7 @@
 const ASTM_CHANNELS = {
     blank:   { label: 'Blank', role: 'Background reference', colorVar: '--blank' },
     control: { label: 'Microcrystalline cellulose', role: 'Positive control', colorVar: '--positive' },
-    sample:  { label: 'PPG-based polyurethane', role: 'Test material', colorVar: '--sample' },
+    sample:  { label: 'Self-healing polyurethane', role: 'Test material', colorVar: '--sample' },
 };
 
 // Alerts shown while this page is open, for example
@@ -290,10 +290,13 @@ function checkAlertThresholds(r) {
 }
 
 function initCharts() {
-    Chart.defaults.font.family = "Arial, Helvetica, sans-serif";
+    const FONT = 'Arial, Helvetica, sans-serif';
+    Chart.defaults.font.family = FONT;
     const TZ = 'America/New_York';
     const fmtTickHour = (v) => new Date(v).toLocaleString('en-US',
         { timeZone: TZ, hour: 'numeric', hour12: true });
+    const fmtTickMinute = (v) => new Date(v).toLocaleString('en-US',
+        { timeZone: TZ, hour: 'numeric', minute: '2-digit', hour12: true });
     const fmtTickDay = (v) => new Date(v).toLocaleString('en-US',
         { timeZone: TZ, month: 'short', day: 'numeric' });
     const fmtTooltip = (items) => new Date(items[0].parsed.x).toLocaleString('en-US',
@@ -311,13 +314,14 @@ function initCharts() {
                 type: 'time',
                 ticks: {
                     color: chartToken('--text-muted'),
-                    font: { size: 13 },
+                    font: { family: FONT, size: 13 },
                     maxTicksLimit: 8,
                     autoSkipPadding: 16,
                     callback: function(v, i, ticks) {
                         if (ticks && ticks.length > 1) {
                             const range = ticks[ticks.length - 1].value - ticks[0].value;
-                            return range > 36 * 3600 * 1000 ? fmtTickDay(v) : fmtTickHour(v);
+                            if (range > 36 * 3600 * 1000) return fmtTickDay(v);
+                            return range > 6 * 3600 * 1000 ? fmtTickHour(v) : fmtTickMinute(v);
                         }
                         return fmtTickHour(v);
                     },
@@ -325,13 +329,13 @@ function initCharts() {
                 grid: { color: chartToken('--border') },
             },
             y: {
-                ticks: { color: chartToken('--text-muted') }, font: { size: 13 },
+                ticks: { color: chartToken('--text-muted'), font: { family: FONT, size: 13 } },
                 grid: { color: chartToken('--border') },
             },
         },
         plugins: {
-            legend: { position: 'top', align: 'center', labels: { color: chartToken('--text'), boxWidth: 14, font: { size: 14, weight: '600' }, padding: 14, }, },
-            tooltip: { callbacks: { title: fmtTooltip }, titleFont: { size: 15 }, bodyFont: { size: 15 } },
+            legend: { position: 'top', align: 'center', labels: { color: chartToken('--text'), boxWidth: 14, font: { family: FONT, size: 14, weight: '600' }, padding: 14, }, },
+            tooltip: { callbacks: { title: fmtTooltip }, titleFont: { family: FONT, size: 15 }, bodyFont: { family: FONT, size: 15 } },
         },
     };
 

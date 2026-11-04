@@ -297,10 +297,8 @@ main {
 .chart-container-primary { height: 500px; }
 
 .chart-container h3 {
-    font-size: 0.95rem;
+    font-size: 1.1rem;
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
     color: var(--cornell-red);
     margin-bottom: var(--space-3);
 }
