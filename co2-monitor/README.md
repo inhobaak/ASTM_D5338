@@ -13,8 +13,11 @@ SCD-30 x3 ─ TCA9548A ─ Pico W ──► microSD card   (primary record, ever
 - `sheets/` — the Apps Script that stores rows in a Google Sheet and serves
   them to the dashboard. Setup steps are in [sheets/README.md](sheets/README.md).
 - `../docs/` — the dashboard site.
-- `firmware/` and `database/` — the earlier single-channel Supabase version,
-  kept for reference. Not used by `code.py`.
+
+**On the CIRCUITPY drive** only `code.py`, `settings.toml` and `lib/` are
+needed. `lib/` must contain `adafruit_connection_manager`, `adafruit_requests`,
+`adafruit_ntp`, `adafruit_tca9548a`, `adafruit_scd30`, `adafruit_bus_device`
+and `adafruit_register` (from the CircuitPython 10.x library bundle).
 
 ---
 

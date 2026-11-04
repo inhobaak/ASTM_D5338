@@ -1,27 +1,36 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Cornell CALS palette (cals.cornell.edu brand guide: color & typography) */
 :root {
-    --bg:           #101824;
-    --bg-deep:      #0c121b;
-    --surface:      #172434;
-    --surface-2:    #20344a;
-    --surface-3:    #122031;
-    --text:         #eef4ef;
-    --text-muted:   #9fb0aa;
-    --online:       #46d08c;
-    --stale:        #f0c95a;
-    --offline:      #6d7a7d;
-    --alert:        #ff5f6d;
-    --border:       #2a4054;
-    --focus:        #7fb7ff;
-    --blank:        #8fb0c8;
-    --positive:    #7fd7a3;
-    --sample:       #f0a35e;
-    --wash-blue:    rgba(127, 183, 255, 0.16);
-    --header-glass: rgba(18, 32, 49, 0.92);
-    --panel-glass:  rgba(32, 52, 74, 0.95);
-    --panel-glass-2: rgba(23, 36, 52, 0.88);
-    --radius:       12px;
+    --cornell-red:  #B31B1B;   /* primary */
+    --gray-11:      #55565A;   /* Cool Gray 11 */
+    --gray-430:     #7D868C;   /* PMS 430 */
+    --gray-4:       #BDBBBB;   /* Cool Gray 4 */
+    --gray-1:       #F2F2F2;   /* Cool Gray 1 */
+    --red-032:      #EF4035;   /* secondary accents, used sparingly */
+    --blue-7462:    #0068AC;
+    --blue-process: #3787B0;
+    --green-369:    #6EB43F;
+
+    --bg:           #FFFFFF;
+    --surface:      #FFFFFF;
+    --surface-2:    var(--gray-1);
+    --text:         #222222;
+    --text-muted:   var(--gray-11);
+    --border:       #E1E1E1;
+    --focus:        var(--cornell-red);
+
+    --online:       var(--green-369);
+    --stale:        var(--red-032);
+    --offline:      var(--gray-4);
+    --alert:        var(--cornell-red);
+
+    /* one colour per vessel, also used for the chart lines */
+    --blank:        var(--gray-430);
+    --positive:     var(--blue-7462);
+    --sample:       var(--cornell-red);
+
+    --radius:       6px;
     --space-1:      0.25rem;
     --space-2:      0.5rem;
     --space-3:      0.75rem;
@@ -31,36 +40,46 @@
 }
 
 body {
-    font-family: "Aptos", "Segoe UI", system-ui, sans-serif;
-    background:
-        radial-gradient(circle at top left, var(--wash-blue), transparent 34rem),
-        linear-gradient(135deg, var(--bg), var(--bg-deep) 70%);
+    font-family: "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+    background: var(--surface-2);
     color: var(--text);
     min-height: 100vh;
-    padding: 0 0 var(--space-6);
 }
 
-header {
-    background: var(--header-glass);
-    padding: var(--space-5);
+/* Cornell / CALS brand bar */
+.brand-bar {
+    background: var(--cornell-red);
     display: flex;
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
     gap: var(--space-4);
-    border-bottom: 1px solid var(--border);
+    padding: var(--space-3) var(--space-5);
+}
+
+.brand-bar a { display: flex; align-items: center; gap: var(--space-3); }
+.brand-seal     { height: 56px; width: auto; }
+.brand-logotype { height: 30px; width: auto; }
+.brand-cals img { height: 56px; width: auto; display: block; }
+
+header {
+    background: var(--bg);
+    padding: var(--space-5);
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    border-bottom: 3px solid var(--cornell-red);
     position: sticky;
     top: 0;
     z-index: 10;
-    backdrop-filter: blur(18px);
 }
 
-.header-copy {
-    max-width: 760px;
-}
+.header-copy { max-width: 760px; }
 
 .eyebrow {
-    color: var(--positive);
+    color: var(--cornell-red);
     font-size: 0.76rem;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -69,10 +88,10 @@ header {
 }
 
 header h1 {
-    font-size: clamp(1.6rem, 4vw, 3rem);
-    font-weight: 750;
-    letter-spacing: -0.04em;
-    line-height: 1;
+    font-size: clamp(1.6rem, 4vw, 2.6rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
 }
 
 .subtitle {
@@ -88,31 +107,31 @@ header h1 {
 }
 
 .time-range-selector button {
-    background: var(--surface);
-    color: var(--text-muted);
-    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--cornell-red);
+    border: 1px solid var(--cornell-red);
     border-radius: var(--radius);
     padding: var(--space-2) var(--space-4);
     font-size: 0.85rem;
     font-weight: 700;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background 0.15s, color 0.15s;
 }
 
-.time-range-selector button.active,
-.time-range-selector button:hover {
-    background: var(--surface-2);
-    color: var(--text);
-    border-color: var(--focus);
+.time-range-selector button:hover { background: #FBEAEA; }
+
+.time-range-selector button.active {
+    background: var(--cornell-red);
+    color: #FFFFFF;
 }
 
 .alert-banner {
     display: none;
     background: var(--alert);
-    color: var(--text);
+    color: #FFFFFF;
     text-align: center;
     padding: var(--space-3) var(--space-4);
-    font-weight: 500;
+    font-weight: 600;
     font-size: 0.9rem;
 }
 
@@ -126,9 +145,10 @@ main {
 
 .overview-panel {
     align-items: center;
-    background: linear-gradient(135deg, var(--panel-glass), var(--panel-glass-2));
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: calc(var(--radius) + var(--space-1));
+    border-left: 4px solid var(--cornell-red);
+    border-radius: var(--radius);
     display: grid;
     gap: var(--space-4);
     grid-template-columns: minmax(220px, 0.8fr) minmax(260px, 1.2fr);
@@ -137,8 +157,8 @@ main {
 }
 
 .overview-panel h2 {
-    font-size: clamp(1.2rem, 2vw, 1.8rem);
-    letter-spacing: -0.03em;
+    font-size: clamp(1.2rem, 2vw, 1.6rem);
+    letter-spacing: -0.01em;
 }
 
 .overview-panel p:last-child {
@@ -148,19 +168,19 @@ main {
 
 .section-title {
     font-size: 0.75rem;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--text-muted);
-    margin-bottom: var(--space-3);
+    color: var(--cornell-red);
+    margin-bottom: var(--space-2);
 }
 
 .loading-state {
     color: var(--text-muted);
-    font-size: 0.85rem;
+    font-size: 0.9rem;
 }
 
-/* Channel Cards */
+/* Channel cards */
 .channel-cards {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -171,20 +191,18 @@ main {
 .channel-card {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-left: 4px solid var(--offline);
+    border-top: 4px solid var(--gray-4);
     border-radius: var(--radius);
     padding: var(--space-4);
-    transition: border-color 0.3s;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    transition: opacity 0.3s;
 }
 
-#card-pico-ch-01 { border-top: 1px solid var(--blank); }
-#card-pico-ch-02 { border-top: 1px solid var(--positive); }
-#card-pico-ch-03 { border-top: 1px solid var(--sample); }
+#card-blank   { border-top-color: var(--blank); }
+#card-control { border-top-color: var(--positive); }
+#card-sample  { border-top-color: var(--sample); }
 
-.channel-card.online  { border-left-color: var(--online); }
-.channel-card.stale   { border-left-color: var(--stale); }
-.channel-card.offline { border-left-color: var(--offline); opacity: 0.65; }
-.channel-card.alert   { border-left-color: var(--alert); }
+.channel-card.offline { opacity: 0.6; }
 
 .channel-card .card-header {
     display: flex;
@@ -195,7 +213,7 @@ main {
 }
 
 .channel-card .card-name {
-    font-weight: 600;
+    font-weight: 700;
     font-size: 1.05rem;
 }
 
@@ -206,7 +224,7 @@ main {
 }
 
 .channel-card .card-role {
-    color: var(--text);
+    color: var(--text-muted);
     font-size: 0.72rem;
     font-weight: 700;
     letter-spacing: 0.08em;
@@ -239,13 +257,13 @@ main {
 .metric-row:last-of-type { border-bottom: none; }
 
 .metric-label {
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     color: var(--text-muted);
 }
 
 .metric-value {
     font-size: 1.05rem;
-    font-weight: 600;
+    font-weight: 700;
     font-variant-numeric: tabular-nums;
 }
 
@@ -267,28 +285,25 @@ main {
     border-radius: var(--radius);
     padding: var(--space-4) var(--space-5) var(--space-5);
     margin-bottom: var(--space-4);
-    height: 440px;
+    height: 420px;
     display: flex;
     flex-direction: column;
 }
 
 .chart-container canvas { flex: 1 1 auto; min-height: 0; width: 100%; }
 
-.chart-container-primary {
-    background: linear-gradient(180deg, var(--surface-2), var(--surface));
-    height: 520px;
-}
+.chart-container-primary { height: 500px; }
 
 .chart-container h3 {
-    font-size: 1.03rem;
+    font-size: 0.95rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--text);
+    color: var(--cornell-red);
     margin-bottom: var(--space-3);
 }
 
-/* Alert Log */
+/* Alert log */
 .alert-log {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -298,7 +313,7 @@ main {
 
 .alert-log h3 {
     font-size: 0.82rem;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-muted);
@@ -331,20 +346,28 @@ main {
     font-style: italic;
 }
 
+footer {
+    background: var(--gray-11);
+    color: #FFFFFF;
+    padding: var(--space-5);
+    text-align: center;
+    font-size: 0.85rem;
+    line-height: 1.6;
+}
+
+footer .footer-note { color: var(--gray-4); font-size: 0.78rem; }
+
 /* Mobile */
 @media (max-width: 600px) {
-    header { padding: var(--space-4); }
+    .brand-bar   { padding: var(--space-3) var(--space-4); }
+    .brand-seal  { height: 44px; }
+    .brand-logotype { height: 24px; }
+    .brand-cals img { height: 44px; }
+    header { padding: var(--space-4); position: static; }
     main   { padding: var(--space-4); }
 
     .overview-panel { grid-template-columns: 1fr; }
-
-    .channel-cards {
-        grid-template-columns: 1fr;
-    }
-
-    .chart-container { height: 340px; }
-}
-
-@media (max-width: 400px) {
-    .channel-cards { grid-template-columns: 1fr; }
+    .channel-cards  { grid-template-columns: 1fr; }
+    .chart-container { height: 320px; padding: var(--space-3); }
+    .chart-container-primary { height: 360px; }
 }

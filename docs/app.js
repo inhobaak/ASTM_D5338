@@ -2,7 +2,7 @@
 // (CHANNELS in its settings.toml: "blank:0,control:1,sample:2").
 const ASTM_CHANNELS = {
     blank:   { label: 'Blank', role: 'Background reference', colorVar: '--blank' },
-    control: { label: "Jack's candy", role: 'Positive control', colorVar: '--positive' },
+    control: { label: 'Microcrystalline cellulose', role: 'Positive control', colorVar: '--positive' },
     sample:  { label: 'PPG-based polyurethane', role: 'Test material', colorVar: '--sample' },
 };
 
@@ -364,7 +364,7 @@ function rebuildChartDatasets() {
                 data: d[metric],
                 borderColor: channelColors[chId] || chartToken('--focus'),
                 backgroundColor: 'transparent',
-                borderWidth: 1.5,
+                borderWidth: 2,
                 pointRadius: 0,
                 tension: 0.2,
             }));

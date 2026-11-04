@@ -4,17 +4,28 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>D5338 · CO₂ Monitor</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="assets/cornell-seal-red.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="style.css?v=2">
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-    <script src="config.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="config.js?v=2"></script>
 </head>
 <body>
 
+<div class="brand-bar">
+    <a class="brand-cornell" href="https://www.cornell.edu/">
+        <img class="brand-seal" src="assets/cornell-seal-white.svg" alt="">
+        <img class="brand-logotype" src="assets/cornell-logotype-white.svg" alt="Cornell University">
+    </a>
+    <a class="brand-cals" href="https://cals.cornell.edu/">
+        <img src="assets/cals-wordmark-white.svg" alt="Cornell CALS, College of Agriculture and Life Sciences">
+    </a>
+</div>
+
 <header>
     <div class="header-copy">
-        <p class="eyebrow">ASTM D5338</p>
+        <p class="eyebrow">ASTM D5338 · Controlled composting</p>
         <h1>CO<sub>2</sub> evolution</h1>
         <p class="subtitle">Live CO<sub>2</sub>, temperature, and humidity across three vessels.</p>
     </div>
@@ -33,7 +44,7 @@
             <p class="section-title">Setup</p>
             <h2>Blank · Control · Sample</h2>
         </div>
-        <p>Background reference, Jack's candy as the positive control, and PPG-based polyurethane as the test material.</p>
+        <p>Compost-only blank as the background reference, microcrystalline cellulose as the positive control, and PPG-based polyurethane as the test material.</p>
     </section>
 
     <div class="channel-cards" id="channel-cards">
@@ -61,6 +72,11 @@
     </div>
 </main>
 
-<script src="app.js"></script>
+<footer>
+    <p>Cornell University · College of Agriculture and Life Sciences</p>
+    <p class="footer-note">Readings are 30-second averages from three SCD-30 sensors, uploaded every 2 minutes to Google Sheets. Times shown in Eastern time.</p>
+</footer>
+
+<script src="app.js?v=2"></script>
 </body>
 </html>
