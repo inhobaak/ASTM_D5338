@@ -1,4 +1,5 @@
 import os
+import gc
 import time
 import json
 import board
@@ -330,14 +331,20 @@ def upload():
         sync_ntp()      # HTTPS certificates can't be checked while the clock reads 2000
         if not time_synced():
             return False
+    gc.collect()
     try:
         for _ in range(3):               # catch up at most 3 batches per pass
             if not pending or not upload_batch():
                 break
         return not pending
     except Exception as e:
-        print("Upload error:", e)
+        print("Upload error:", e, "| free RAM", gc.mem_free())
         return False
+    finally:
+        # Google drops idle connections long before the next upload, and two
+        # open TLS sessions take most of the RAM; start fresh every time.
+        adafruit_connection_manager.connection_manager_close_all(pool)
+        gc.collect()
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 def main():
