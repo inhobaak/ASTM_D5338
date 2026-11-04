@@ -6,9 +6,8 @@ import board
 import busio
 import digitalio
 import rtc
-import sdcardio
-import storage
 import supervisor
+import microcontroller
 import wifi
 import ssl
 import adafruit_connection_manager
@@ -18,8 +17,9 @@ import adafruit_tca9548a
 from adafruit_scd30 import SCD30
 
 # ASTM D5338 CO2 logger — Raspberry Pi Pico W, CircuitPython 10
-# The SD card is the primary record. Google Sheets (via an Apps Script web
-# app) is the live copy. Logging to SD never waits on Wi-Fi or Google.
+# Every 30 s row is uploaded straight away to a Google Sheet (via an Apps
+# Script web app), which is the record. There is no SD card: rows wait in RAM
+# while Wi-Fi or Google is down and are lost only if the board restarts then.
 
 # ── Config (from settings.toml) ───────────────────────────────────────────────
 def _env(name, default=""):
@@ -31,7 +31,7 @@ WIFI_PASSWORD   = _env("CIRCUITPY_WIFI_PASSWORD")
 SHEETS_URL      = _env("SHEETS_URL")
 SHEETS_TOKEN    = _env("SHEETS_TOKEN")
 LOG_INTERVAL    = int(_env("MEASUREMENT_INTERVAL", "30"))   # s between logged rows
-UPLOAD_INTERVAL = int(_env("UPLOAD_INTERVAL", "120"))       # s between uploads
+UPLOAD_INTERVAL = int(_env("UPLOAD_INTERVAL", "30"))        # s between uploads
 TEMP_OFFSET     = float(_env("TEMP_OFFSET", "2.0"))
 ALTITUDE_M      = int(_env("ALTITUDE_M", "0"))              # building elevation
 PRESSURE_MBAR   = int(_env("AMBIENT_PRESSURE_MBAR", "0"))   # 0 = use altitude
@@ -42,7 +42,7 @@ CHANNELS = [
 ]
 
 SENSOR_INTERVAL = 2      # SCD-30 runs continuously; readings are averaged per row
-MAX_PENDING     = 240    # rows kept in RAM for upload (2 h at 30 s); SD keeps all
+MAX_PENDING     = 480    # rows kept in RAM while uploads fail (4 h at 30 s)
 BATCH_MAX       = 60     # rows per upload request
 NTP_EVERY       = 6 * 3600
 WIFI_RETRY      = 60
@@ -68,8 +68,22 @@ def blink(times, on_ms, off_ms=100):
 
 # ── Sensors (TCA9548A multiplexer) ────────────────────────────────────────────
 # Wiring: SDA → GP4, SCL → GP5, VIN → 3V3, GND → GND
-i2c = busio.I2C(board.GP5, board.GP4, frequency=50000)
-tca = adafruit_tca9548a.TCA9548A(i2c)
+tca = None
+sensors = {name: None for name, _ in CHANNELS}
+
+def setup_sensors():
+    """Called from main(), inside the restart-on-error guard, so a loose
+    multiplexer wire at power-up means a retry in 30 s, not a dead logger."""
+    global tca
+    i2c = busio.I2C(board.GP5, board.GP4, frequency=50000)
+    tca = adafruit_tca9548a.TCA9548A(i2c)
+    for name, port in CHANNELS:
+        try:
+            sensors[name] = setup_sensor(port)
+            print("SCD-30 ready:", name, "port", port)
+        except Exception as e:
+            sensors[name] = None
+            print("SCD-30 missing:", name, "port", port, e)
 
 def setup_sensor(port):
     s = SCD30(tca[port], ambient_pressure=PRESSURE_MBAR)
@@ -83,15 +97,6 @@ def setup_sensor(port):
     if not PRESSURE_MBAR and s.altitude != ALTITUDE_M:
         s.altitude = ALTITUDE_M
     return s
-
-sensors = {}
-for name, port in CHANNELS:
-    try:
-        sensors[name] = setup_sensor(port)
-        print("SCD-30 ready:", name, "port", port)
-    except Exception as e:
-        sensors[name] = None
-        print("SCD-30 missing:", name, "port", port, e)
 
 # Running sums for the current row: name -> [co2, temp, rh, n]
 sums = {name: [0.0, 0.0, 0.0, 0] for name, _ in CHANNELS}
@@ -133,84 +138,6 @@ def utc_now(secs=None):
     t = time.localtime() if secs is None else time.localtime(secs)
     return "{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z".format(
         t.tm_year, t.tm_mon, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec)
-
-# ── SD card (SPI) ─────────────────────────────────────────────────────────────
-# Wiring (Adafruit 5V-ready breakout): CLK → GP10, DI → GP11, DO → GP12,
-# CS → GP13, 5V → VBUS, GND → GND
-# A card that drops out (loose contact, removed) is remounted automatically;
-# rows logged meanwhile wait in RAM and are written once it is back.
-SD_BAUD    = 4_000_000   # slower than the 8 MHz default; tolerates longer wires
-SD_RETRY   = 60          # s between remount attempts
-SD_BACKLOG = 120         # rows held while the card is out (1 h at 30 s)
-
-_spi = busio.SPI(clock=board.GP10, MOSI=board.GP11, MISO=board.GP12)
-_sd = None
-SD_PATH = None
-_next_sd_try = 0
-sd_backlog = []
-
-def sd_unmount():
-    global _sd, SD_PATH
-    SD_PATH = None
-    try:
-        storage.umount("/sd")
-    except Exception:
-        pass
-    if _sd:
-        try:
-            _sd.deinit()
-        except Exception:
-            pass
-        _sd = None
-
-def sd_mount():
-    """(Re)mount the card and pick the log file. Returns True when ready."""
-    global _sd, SD_PATH
-    sd_unmount()
-    try:
-        _sd = sdcardio.SDCard(_spi, board.GP13, baudrate=SD_BAUD)
-        storage.mount(storage.VfsFat(_sd), "/sd")
-        path = "/sd/d5338_log.csv"
-        header_line = ",".join(HEADER)
-        try:
-            with open(path) as f:
-                if f.readline().strip() != header_line:
-                    path = "/sd/d5338_log_" + BOOT_ID + ".csv"   # channel set changed
-        except OSError:
-            pass
-        try:
-            os.stat(path)
-        except OSError:
-            with open(path, "w") as f:
-                f.write(header_line + "\n")
-        SD_PATH = path
-        print("SD logging to", SD_PATH)
-        return True
-    except Exception as e:
-        print("SD card not available:", e)
-        sd_unmount()
-        return False
-
-def log_to_sd(row):
-    global _next_sd_try
-    sd_backlog.append(row)
-    if len(sd_backlog) > SD_BACKLOG:
-        sd_backlog.pop(0)
-    if not SD_PATH:
-        if now_s() < _next_sd_try:
-            return
-        _next_sd_try = now_s() + SD_RETRY
-        if not sd_mount():
-            return
-    try:
-        with open(SD_PATH, "a") as f:
-            f.write("".join(",".join(str(v) for v in r) + "\n" for r in sd_backlog))
-        sd_backlog.clear()
-    except Exception as e:
-        print("SD write error, will remount:", e)
-        sd_unmount()
-
-sd_mount()
 
 # ── Wi-Fi, NTP, Google Sheets ─────────────────────────────────────────────────
 _GTS_ROOTS = """-----BEGIN CERTIFICATE-----
@@ -279,7 +206,7 @@ def wifi_up():
         print("Wi-Fi connected:", wifi.radio.ipv4_address)
         return True
     except Exception as e:
-        print("Wi-Fi failed (logging to SD continues):", e)
+        print("Wi-Fi failed (rows are kept in RAM):", e)
         return False
 
 def sync_ntp():
@@ -290,7 +217,7 @@ def sync_ntp():
         print("Time synced (UTC):", utc_now())
         # Rows logged before the first sync get their time back from uptime_s
         now_t, now_up = time.time(), now_s()
-        for row in pending + sd_backlog:
+        for row in pending:
             if row[0] == "" and row[1] == BOOT_ID:
                 row[0] = utc_now(now_t - (now_up - row[2]))
     except Exception as e:
@@ -298,17 +225,7 @@ def sync_ntp():
 
 pending = []
 upload_failures = 0   # consecutive upload passes that raised a network error
-
-def reset_wifi():
-    """Drop every socket and power-cycle the radio. After a while the Pico W
-    can get stuck failing every connection (ECONNABORTED) until this is done."""
-    global _next_wifi_try
-    print("Resetting Wi-Fi after", upload_failures, "failed uploads")
-    adafruit_connection_manager.connection_manager_close_all(pool)
-    wifi.radio.enabled = False
-    time.sleep(1)
-    wifi.radio.enabled = True
-    _next_wifi_try = 0          # reconnect on the next upload pass
+MAX_UPLOAD_FAILURES = 10   # then restart code.py (~5 min at 30 s)
 
 def upload_batch():
     """Send up to BATCH_MAX pending rows. Returns True if the sheet accepted them."""
@@ -354,23 +271,49 @@ def upload():
     except Exception as e:
         upload_failures += 1
         print("Upload error:", e, "| free RAM", gc.mem_free(), "| failures", upload_failures)
-        return False
-    finally:
-        # Google drops idle connections long before the next upload, and two
-        # open TLS sessions take most of the RAM; start fresh every time.
+        # Drop the broken connections; healthy ones stay open between uploads,
+        # because the Pico W's network stack fails after ~2 min idle.
         adafruit_connection_manager.connection_manager_close_all(pool)
         gc.collect()
+        return False
+
+# ── Keep unsent rows across a restart ─────────────────────────────────────────
+# microcontroller.nvm is 4 KB of flash that survives a reset. It is written
+# only when code.py restarts after an error, so flash wear is negligible.
+def save_pending():
+    rows = pending[-40:]
+    while rows:
+        data = json.dumps(rows).encode()
+        if len(data) <= len(microcontroller.nvm) - 2:
+            microcontroller.nvm[0:2] = len(data).to_bytes(2, "big")
+            microcontroller.nvm[2:2 + len(data)] = data
+            print("Saved", len(rows), "unsent rows for after the restart")
+            return
+        rows = rows[1:]
+
+def restore_pending():
+    size = int.from_bytes(microcontroller.nvm[0:2], "big")
+    if 0 < size <= len(microcontroller.nvm) - 2:
+        try:
+            pending.extend(json.loads(bytes(microcontroller.nvm[2:2 + size]).decode()))
+            print("Restored", len(pending), "unsent rows from before the restart")
+        except ValueError:
+            pass
+    if size:
+        microcontroller.nvm[0:2] = bytes(2)
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 def main():
+    restore_pending()
+    setup_sensors()
     print("Boot", BOOT_ID, "| columns:", ",".join(HEADER))
     if not SHEETS_URL or not SHEETS_TOKEN:
-        print("SHEETS_URL / SHEETS_TOKEN not set: logging to SD only")
+        print("SHEETS_URL / SHEETS_TOKEN not set: nothing will be saved")
     if wifi_up():
         sync_ntp()
 
     next_row    = now_s() + LOG_INTERVAL
-    next_upload = now_s() + UPLOAD_INTERVAL
+    next_upload = now_s()
     while True:
         poll_sensors()
 
@@ -378,26 +321,25 @@ def main():
             next_row += LOG_INTERVAL
             row = take_row()
             print(row)
-            log_to_sd(row)
             pending.append(row)
             if len(pending) > MAX_PENDING:
-                pending.pop(0)            # still on SD
-            blink(1, 50)
+                pending.pop(0)            # oldest row is dropped
+            blink(1, 150)
 
-        if now_s() >= next_upload:
-            next_upload = now_s() + UPLOAD_INTERVAL
-            if wifi_up() and (_last_ntp is None or now_s() - _last_ntp > NTP_EVERY):
-                sync_ntp()
-            if upload():
-                blink(1, 400)
-            elif SHEETS_URL:
-                blink(2, 100, 100)
-                # Network errors: reset Wi-Fi after 2 and 4 failed passes; if
-                # it still fails, restart code.py (rows already on SD are kept)
-                if upload_failures >= 6:
-                    raise RuntimeError("uploads failed %d times in a row" % upload_failures)
-                if upload_failures in (2, 4):
-                    reset_wifi()
+            # Upload straight after the row, as the original logger did: the
+            # connection never sits idle long enough for the Pico W to drop it.
+            if now_s() >= next_upload:
+                # Anchor to the row time, not the end of the upload, so a slow
+                # upload doesn't push the next one past the next row
+                next_upload = now_s() + UPLOAD_INTERVAL - 2
+                if wifi_up() and (_last_ntp is None or now_s() - _last_ntp > NTP_EVERY):
+                    sync_ntp()
+                if upload():
+                    blink(1, 400)
+                elif SHEETS_URL:
+                    blink(2, 100, 100)
+                    if upload_failures >= MAX_UPLOAD_FAILURES:
+                        raise RuntimeError("uploads failed %d times in a row" % upload_failures)
 
         time.sleep(0.5)
 
@@ -407,9 +349,8 @@ except Exception as e:
     # Never stop silently: record the error, wait, and restart code.py
     print("Fatal error, restarting in 30 s:", repr(e))
     try:
-        with open("/sd/errors.log", "a") as f:
-            f.write("{} {} {}\n".format(utc_now(), BOOT_ID, repr(e)))
-    except Exception:
-        pass
+        save_pending()
+    except Exception as e2:
+        print("Could not save unsent rows:", e2)
     time.sleep(30)
     supervisor.reload()

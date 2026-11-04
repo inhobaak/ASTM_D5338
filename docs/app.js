@@ -6,9 +6,16 @@ const ASTM_CHANNELS = {
     sample:  { label: 'Self-healing polyurethane', role: 'Test material', colorVar: '--sample' },
 };
 
+// Inlet air is not CO2-stripped, so room CO2 and compost respiration are
+// removed by subtracting the blank vessel: net = vessel CO2 - blank CO2.
+const BLANK_CHANNEL = 'blank';
+
+// Chart key -> metric stored per channel
+const METRICS = { net: 'net', co2: 'co2', temp: 'temp', humidity: 'humidity' };
+
 // Alerts shown while this page is open, for example
 //   { channel_id: 'sample', metric: 'temp_c', direction: 'below', threshold: 55 }
-// metric is co2_ppm, temp_c or humidity_rh; leave out channel_id to watch all.
+// metric is net_ppm, co2_ppm, temp_c or humidity_rh; leave out channel_id to watch all.
 const ALERT_RULES = [];
 
 // step = seconds per averaged point (0 = every 30 s row)
@@ -18,10 +25,9 @@ const RANGES = {
     '30d': { hours: 720, step: 1800 },
 };
 
-// Rows reach the sheet in 2-minute batches, so allow for that before
-// calling a channel stale or offline.
-const STALE_MINUTES = 5;
-const OFFLINE_MINUTES = 15;
+// The Pico uploads every 30 s row as it is taken.
+const STALE_MINUTES = 2;
+const OFFLINE_MINUTES = 10;
 
 const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 const alertLastFired = {};
@@ -87,13 +93,24 @@ function indexColumns(columns) {
 
 function toReading(row, channelId) {
     const idx = columnIndex[channelId];
+    const blank = columnIndex[BLANK_CHANNEL];
+    const co2 = withOffset(row[idx.co2], channelId);
+    const blankCo2 = blank ? withOffset(row[blank.co2], BLANK_CHANNEL) : null;
     return {
         channel_id: channelId,
         recorded_at: row[0],
-        co2_ppm: row[idx.co2],
+        co2_ppm: co2,
+        net_ppm: channelId !== BLANK_CHANNEL && co2 != null && blankCo2 != null
+            ? Math.round((co2 - blankCo2) * 10) / 10 : null,
         temp_c: row[idx.temp],
         humidity_rh: row[idx.rh],
     };
+}
+
+function withOffset(value, channelId) {
+    if (value == null) return null;
+    const offset = (typeof CO2_OFFSET_PPM !== 'undefined' && CO2_OFFSET_PPM[channelId]) || 0;
+    return Math.round((value + offset) * 10) / 10;
 }
 
 function addPoints(row) {
@@ -101,6 +118,7 @@ function addPoints(row) {
     Object.keys(columnIndex).forEach(chId => {
         if (isHidden(chId)) return;
         const r = toReading(row, chId);
+        channelData[chId].net.push({ x: t, y: r.net_ppm });
         channelData[chId].co2.push({ x: t, y: r.co2_ppm });
         channelData[chId].temp.push({ x: t, y: r.temp_c });
         channelData[chId].humidity.push({ x: t, y: r.humidity_rh });
@@ -122,7 +140,7 @@ async function loadHistoricalData() {
     channelData = {};
     Object.keys(columnIndex).forEach((chId, i) => {
         channelColors[chId] = getChannelColor(chId, i);
-        channelData[chId] = { co2: [], temp: [], humidity: [] };
+        channelData[chId] = { net: [], co2: [], temp: [], humidity: [] };
     });
 
     data.rows.forEach(addPoints);
@@ -155,7 +173,7 @@ async function pollNewRows() {
 
     const cutoff = Date.now() - RANGES[selectedRange].hours * 3600 * 1000;
     Object.keys(channelData).forEach(chId => {
-        ['co2', 'temp', 'humidity'].forEach(k => {
+        Object.values(METRICS).forEach(k => {
             channelData[chId][k] = channelData[chId][k].filter(p => p.x.getTime() >= cutoff);
         });
         updateChartDataset(chId);
@@ -186,6 +204,7 @@ function renderCards(latest) {
             status: statusFor(r.recorded_at),
             last_reading_at: r.recorded_at,
             last_co2_ppm: r.co2_ppm,
+            last_net_ppm: r.net_ppm,
             last_temp_c: r.temp_c,
             last_humidity_rh: r.humidity_rh,
         }));
@@ -205,6 +224,7 @@ function buildChannelCard(ch) {
     div.dataset.lastSeen = ch.last_reading_at || '';
 
     const co2 = ch.last_co2_ppm != null ? ch.last_co2_ppm.toFixed(0) : '-';
+    const net = fmtNet(ch.last_net_ppm);
     const temp = ch.last_temp_c != null ? ch.last_temp_c.toFixed(1) : '-';
     const hum = ch.last_humidity_rh != null ? ch.last_humidity_rh.toFixed(1) : '-';
     const lastSeen = ch.last_reading_at ? timeAgo(new Date(ch.last_reading_at)) : 'never';
@@ -218,17 +238,22 @@ function buildChannelCard(ch) {
             </div>
             <div class="status-dot"></div>
         </div>
+        ${ch.channel_id === BLANK_CHANNEL ? '' : `
+        <div class="metric-row metric-row-net">
+            <span class="metric-label">Net CO<sub>2</sub> (minus blank)</span>
+            <span class="metric-value net-val">${net}</span>
+        </div>`}
         <div class="metric-row">
-            <span class="metric-label">CO<sub>2</sub> ppm</span>
+            <span class="metric-label">CO<sub>2</sub></span>
             <span class="metric-value co2-val">${co2} ppm</span>
         </div>
         <div class="metric-row">
             <span class="metric-label">Temperature</span>
-            <span class="metric-value">${temp} °C</span>
+            <span class="metric-value temp-val">${temp} °C</span>
         </div>
         <div class="metric-row">
             <span class="metric-label">Humidity</span>
-            <span class="metric-value">${hum} %</span>
+            <span class="metric-value rh-val">${hum} %</span>
         </div>
         <div class="last-seen">Last: ${lastSeen}</div>
     `;
@@ -242,11 +267,17 @@ function updateChannelCard(r) {
     card.dataset.lastSeen = r.recorded_at;
     card.className = `channel-card ${statusFor(r.recorded_at)}`;
 
-    const values = card.querySelectorAll('.metric-value');
-    values[0].textContent = r.co2_ppm != null ? `${Number(r.co2_ppm).toFixed(0)} ppm` : '- ppm';
-    values[1].textContent = r.temp_c != null ? `${Number(r.temp_c).toFixed(1)} °C` : '- °C';
-    values[2].textContent = r.humidity_rh != null ? `${Number(r.humidity_rh).toFixed(1)} %` : '- %';
+    const netEl = card.querySelector('.net-val');
+    if (netEl) netEl.textContent = fmtNet(r.net_ppm);
+    card.querySelector('.co2-val').textContent = r.co2_ppm != null ? `${Number(r.co2_ppm).toFixed(0)} ppm` : '- ppm';
+    card.querySelector('.temp-val').textContent = r.temp_c != null ? `${Number(r.temp_c).toFixed(1)} °C` : '- °C';
+    card.querySelector('.rh-val').textContent = r.humidity_rh != null ? `${Number(r.humidity_rh).toFixed(1)} %` : '- %';
     card.querySelector('.last-seen').textContent = `Last: ${timeAgo(new Date(r.recorded_at))}`;
+}
+
+function fmtNet(v) {
+    if (v == null) return '- ppm';
+    return `${v > 0 ? '+' : ''}${Number(v).toFixed(0)} ppm`;
 }
 
 function startOfflineCheck() {
@@ -263,7 +294,8 @@ function startOfflineCheck() {
 function checkAlertThresholds(r) {
     ALERT_RULES.forEach((rule, i) => {
         if (rule.channel_id && rule.channel_id !== r.channel_id) return;
-        const value = rule.metric === 'co2_ppm' ? r.co2_ppm
+        const value = rule.metric === 'net_ppm' ? r.net_ppm
+                    : rule.metric === 'co2_ppm' ? r.co2_ppm
                     : rule.metric === 'temp_c' ? r.temp_c
                     : r.humidity_rh;
         if (value == null) return;
@@ -339,6 +371,11 @@ function initCharts() {
         },
     };
 
+    charts.net = new Chart(document.getElementById('chart-net'), {
+        type: 'line',
+        data: { datasets: [] },
+        options: { ...commonOpts },
+    });
     charts.co2 = new Chart(document.getElementById('chart-co2'), {
         type: 'line',
         data: { datasets: [] },
@@ -357,12 +394,11 @@ function initCharts() {
 }
 
 function rebuildChartDatasets() {
-    ['co2', 'temp', 'humidity'].forEach(metric => {
-        const chart = metric === 'co2' ? charts.co2
-                    : metric === 'temp' ? charts.temp
-                    : charts.humidity;
+    Object.entries(METRICS).forEach(([chartKey, metric]) => {
+        const chart = charts[chartKey];
         chart.data.datasets = Object.entries(channelData)
             .filter(([chId]) => !isHidden(chId))
+            .filter(([chId]) => metric !== 'net' || chId !== BLANK_CHANNEL)
             .map(([chId, d]) => ({
                 label: getChannelLabel({ channel_id: chId }),
                 channelId: chId,
@@ -378,10 +414,8 @@ function rebuildChartDatasets() {
 }
 
 function updateChartDataset(channelId) {
-    ['co2', 'temp', 'humidity'].forEach(metric => {
-        const chart = metric === 'co2' ? charts.co2
-                    : metric === 'temp' ? charts.temp
-                    : charts.humidity;
+    Object.entries(METRICS).forEach(([chartKey, metric]) => {
+        const chart = charts[chartKey];
         const ds = chart.data.datasets.find(d => d.channelId === channelId);
         if (ds) {
             ds.data = channelData[channelId][metric];

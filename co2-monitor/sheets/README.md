@@ -1,10 +1,9 @@
 # Google Sheets upload
 
-The Pico averages each SCD-30 over every `MEASUREMENT_INTERVAL` (30 s) and
-writes one row to the SD card (`/sd/d5338_log.csv`, the primary record).
-Every `UPLOAD_INTERVAL` (120 s) it POSTs the new rows to a Google Apps Script
-web app that appends them to a spreadsheet. If Wi-Fi or Google is down, rows
-wait in RAM (up to 2 h) and are sent later; the SD card always has everything.
+The Pico averages each SCD-30 over every `MEASUREMENT_INTERVAL` (30 s) and,
+right after each row (`UPLOAD_INTERVAL`, 30 s), POSTs it to a Google Apps
+Script web app that appends it to a spreadsheet. The sheet is the record. If
+Wi-Fi or Google is down, rows wait in RAM (up to 4 h) and are sent later.
 
 ## Columns
 
@@ -71,14 +70,14 @@ SHEETS_URL = "https://script.google.com/macros/s/XXXX/exec"
 SHEETS_TOKEN = "..."               # same as the TOKEN script property
 CHANNELS = "blank:0,control:1,sample:2"   # column name : TCA9548A port
 MEASUREMENT_INTERVAL = "30"        # s per logged row
-UPLOAD_INTERVAL = "120"            # s between uploads
+UPLOAD_INTERVAL = "30"             # s between uploads; keep at 30
 TEMP_OFFSET = "2.0"
 ALTITUDE_M = "0"                   # building elevation (m) for SCD-30 compensation
 # AMBIENT_PRESSURE_MBAR = "985"    # optional; overrides ALTITUDE_M
 ```
 
 To add vessels, extend `CHANNELS` (e.g. `"blank:0,control:1,rep1:2,rep2:3,rep3:4"`).
-A changed channel set starts a new SD file so columns never mix.
+A changed channel set starts a new tab header, so check the sheet columns.
 
 ## Size limits
 
@@ -99,5 +98,5 @@ cells:
 | long flash | upload accepted |
 | 2 fast blinks | upload failed (Wi-Fi, URL or token) — rows are kept |
 
-Unexpected errors are written to `/sd/errors.log` and `code.py` restarts
-itself after 30 s instead of stopping.
+On unexpected errors `code.py` restarts itself after 30 s instead of
+stopping; up to 40 unsent rows are kept in the Pico's built-in memory.

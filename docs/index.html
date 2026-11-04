@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>D5338 · CO₂ Monitor</title>
     <link rel="icon" href="assets/cornell-seal-red.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="style.css?v=5">
+    <link rel="stylesheet" href="style.css?v=6">
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-    <script src="config.js?v=5"></script>
+    <script src="config.js?v=6"></script>
 </head>
 <body>
 
@@ -53,7 +53,12 @@
 
     <div class="charts">
         <div class="chart-container chart-container-primary">
-            <h3>CO<sub>2</sub> (ppm)</h3>
+            <h3>Net CO<sub>2</sub> (vessel minus blank, ppm)</h3>
+            <p class="chart-note">CO<sub>2</sub> released by the test material: each vessel's exhaust CO<sub>2</sub> minus the blank (compost only), which also removes the room CO<sub>2</sub> in the inlet air.</p>
+            <canvas id="chart-net"></canvas>
+        </div>
+        <div class="chart-container">
+            <h3>Exhaust CO<sub>2</sub> (ppm)</h3>
             <canvas id="chart-co2"></canvas>
         </div>
         <div class="chart-container">
@@ -74,9 +79,9 @@
 
 <footer>
     <p>Cornell University · College of Agriculture and Life Sciences</p>
-    <p class="footer-note">Readings are 30-second averages from three SCD-30 sensors, uploaded every 2 minutes to Google Sheets. Times shown in Eastern time.</p>
+    <p class="footer-note">Readings are 30-second averages from three SCD-30 sensors, uploaded to Google Sheets as they are taken. Times shown in Eastern time.</p>
 </footer>
 
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

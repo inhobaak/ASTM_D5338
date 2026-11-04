@@ -4,8 +4,7 @@ Three SCD-30 sensors (blank, positive control, sample) on one **Raspberry Pi
 Pico W** running **CircuitPython 10**, through a TCA9548A I2C multiplexer.
 
 ```
-SCD-30 x3 ─ TCA9548A ─ Pico W ──► microSD card   (primary record, every row)
-                                 └─► Google Sheets (live copy, via Apps Script)
+SCD-30 x3 ─ TCA9548A ─ Pico W ──► Google Sheets (the record, via Apps Script)
                                         └─► dashboard on GitHub Pages (docs/)
 ```
 
@@ -35,21 +34,6 @@ and `adafruit_register` (from the CircuitPython 10.x library bundle).
 Each SCD-30 goes on its own TCA9548A port (SD/SC pairs); the ports are set by
 `CHANNELS` in `settings.toml`.
 
-**microSD (Adafruit 5V-ready breakout)**
-
-| Breakout | Pico W |
-|---|---|
-| 5V | VBUS (pin 40) |
-| GND | GND (pin 18) |
-| CLK | GP10 (pin 14) |
-| DI | GP11 (pin 15) |
-| DO | GP12 (pin 16) |
-| CS | GP13 (pin 17) |
-
-Solder the headers and keep the wires short; loose pins are the usual cause
-of an SD card that drops out. `code.py` remounts the card by itself when it
-comes back and writes the rows it held in RAM meanwhile (up to 1 h).
-
 ---
 
 ## settings.toml
@@ -61,7 +45,7 @@ SHEETS_URL = "https://script.google.com/macros/s/XXXX/exec"
 SHEETS_TOKEN = "..."                       # same as the Apps Script TOKEN property
 CHANNELS = "blank:0,control:1,sample:2"    # column name : TCA9548A port
 MEASUREMENT_INTERVAL = "30"                # s per logged row
-UPLOAD_INTERVAL = "120"                    # s between uploads
+UPLOAD_INTERVAL = "30"                     # s between uploads; keep at 30 (see below)
 TEMP_OFFSET = "2.0"
 ALTITUDE_M = "250"                         # building elevation (m)
 ```
@@ -83,10 +67,16 @@ const SHEETS_URL = "https://script.google.com/macros/s/XXXX/exec";
 ```
 
 The page loads the chosen range (24 h of 30 s rows, or 7 d / 30 d averaged)
-and asks for new rows every minute. Channel names, colours and optional
+and asks for new rows every 30 s. Channel names, colours and optional
 browser alerts are at the top of `docs/app.js`.
 
 ---
+
+**Upload interval:** the Pico W's network connection fails if it sits idle
+for about 2 minutes (uploads every 2 min failed with `ECONNABORTED` or froze the
+board; every 30 s they don't). So each 30 s row is uploaded straight away over
+a connection that stays open, as the original Supabase logger did. Don't raise
+`UPLOAD_INTERVAL` above ~30 s.
 
 ## LED
 
@@ -100,7 +90,7 @@ browser alerts are at the top of `docs/app.js`.
 
 Open the serial console (Thonny, PuTTY, or `screen /dev/ttyACM0 115200`):
 
-- `SD card not available` once a minute: no card, or a loose connection.
 - `Wi-Fi failed`: wrong SSID, 5 GHz-only network, or (RedRover) MAC not registered.
 - `Upload rejected: bad token`: `SHEETS_TOKEN` differs from the script's `TOKEN`.
-- Unexpected errors go to `/sd/errors.log`, and `code.py` restarts itself.
+- After 10 failed uploads in a row (~5 min) `code.py` restarts itself; up to
+  40 unsent rows are kept in the Pico's built-in memory and sent after the restart.
