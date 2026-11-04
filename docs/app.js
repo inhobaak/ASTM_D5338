@@ -13,11 +13,6 @@ const BLANK_CHANNEL = 'blank';
 // Chart key -> metric stored per channel
 const METRICS = { net: 'net', co2: 'co2', temp: 'temp', humidity: 'humidity' };
 
-// Alerts shown while this page is open, for example
-//   { channel_id: 'sample', metric: 'temp_c', direction: 'below', threshold: 55 }
-// metric is net_ppm, co2_ppm, temp_c or humidity_rh; leave out channel_id to watch all.
-const ALERT_RULES = [];
-
 // step = seconds per averaged point (0 = every 30 s row)
 const RANGES = {
     '24h': { hours: 24,  step: 0 },
@@ -29,10 +24,6 @@ const RANGES = {
 const STALE_MINUTES = 2;
 const OFFLINE_MINUTES = 10;
 
-const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
-const alertLastFired = {};
-const ALERT_LOG_MAX = 50;
-
 let charts = {};
 let channelColors = {};
 let channelData = {};
@@ -40,7 +31,7 @@ let columnIndex = {};      // channel -> positions of its values in a row
 let columnsKey = '';
 let lastUtc = null;
 let selectedRange = '24h';
-let alertBannerTimeout;
+let lastPointTime = null;  // to break chart lines where data is missing
 
 document.addEventListener('DOMContentLoaded', async () => {
     initCharts();
@@ -49,7 +40,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
     }
     await loadHistoricalData();
+    await loadEvolution();
     setInterval(pollNewRows, REFRESH_SECONDS * 1000);
+    setInterval(loadEvolution, 5 * 60 * 1000);
     startOfflineCheck();
 
     document.querySelectorAll('.time-range-selector button').forEach(btn => {
@@ -61,10 +54,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             await loadHistoricalData();
         });
     });
-
-    if (ALERT_RULES.length && 'Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
-    }
 });
 
 async function fetchSheet(params) {
@@ -115,8 +104,17 @@ function withOffset(value, channelId) {
 
 function addPoints(row) {
     const t = new Date(row[0]);
+    // A gap of more than 3 rows (or 3 averaged points) is drawn as a break,
+    // not as a straight line across the missing data
+    const gapMs = Math.max(3 * (RANGES[selectedRange].step || 30), 120) * 1000;
+    const gap = lastPointTime && t - lastPointTime > gapMs;
+    lastPointTime = t;
     Object.keys(columnIndex).forEach(chId => {
         if (isHidden(chId)) return;
+        if (gap) {
+            const mid = new Date(t - gapMs / 2);
+            Object.values(METRICS).forEach(k => channelData[chId][k].push({ x: mid, y: null }));
+        }
         const r = toReading(row, chId);
         channelData[chId].net.push({ x: t, y: r.net_ppm });
         channelData[chId].co2.push({ x: t, y: r.co2_ppm });
@@ -143,6 +141,7 @@ async function loadHistoricalData() {
         channelData[chId] = { net: [], co2: [], temp: [], humidity: [] };
     });
 
+    lastPointTime = null;
     data.rows.forEach(addPoints);
     lastUtc = data.latest ? data.latest[0] : null;
     renderCards(data.latest);
@@ -164,9 +163,7 @@ async function pollNewRows() {
         addPoints(row);
         Object.keys(columnIndex).forEach(chId => {
             if (isHidden(chId)) return;
-            const r = toReading(row, chId);
-            updateChannelCard(r);
-            checkAlertThresholds(r);
+            updateChannelCard(toReading(row, chId));
         });
     });
     lastUtc = data.rows[data.rows.length - 1][0];
@@ -291,36 +288,6 @@ function startOfflineCheck() {
     }, 60000);
 }
 
-function checkAlertThresholds(r) {
-    ALERT_RULES.forEach((rule, i) => {
-        if (rule.channel_id && rule.channel_id !== r.channel_id) return;
-        const value = rule.metric === 'net_ppm' ? r.net_ppm
-                    : rule.metric === 'co2_ppm' ? r.co2_ppm
-                    : rule.metric === 'temp_c' ? r.temp_c
-                    : r.humidity_rh;
-        if (value == null) return;
-
-        const triggered = rule.direction === 'above'
-            ? value > rule.threshold
-            : value < rule.threshold;
-
-        if (!triggered) return;
-
-        const cooldownKey = `${i}|${r.channel_id}`;
-        const now = Date.now();
-        if (alertLastFired[cooldownKey] && now - alertLastFired[cooldownKey] < ALERT_COOLDOWN_MS) return;
-        alertLastFired[cooldownKey] = now;
-
-        const msg = `${getChannelLabel({ channel_id: r.channel_id })}: ${rule.metric} = ${value.toFixed(1)} (${rule.direction} ${rule.threshold})`;
-        showAlertBanner(msg);
-        addAlertLogEntry(msg);
-
-        if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('ASTM D5338 CO₂ Alert', { body: msg });
-        }
-    });
-}
-
 function initCharts() {
     const FONT = 'Arial, Helvetica, sans-serif';
     Chart.defaults.font.family = FONT;
@@ -376,6 +343,21 @@ function initCharts() {
         data: { datasets: [] },
         options: { ...commonOpts },
     });
+    charts.evolution = new Chart(document.getElementById('chart-evolution'), {
+        type: 'line',
+        data: { datasets: [] },
+        options: {
+            ...commonOpts,
+            scales: {
+                x: { type: 'linear', min: 0, title: { display: true, text: 'Days since start', font: { family: FONT, size: 13 } },
+                     ticks: { color: chartToken('--text-muted'), font: { family: FONT, size: 13 } }, grid: { color: chartToken('--border') } },
+                y: { title: { display: true, text: '', font: { family: FONT, size: 13 } },
+                     ticks: { color: chartToken('--text-muted'), font: { family: FONT, size: 13 } }, grid: { color: chartToken('--border') } },
+            },
+            plugins: { ...commonOpts.plugins, tooltip: { titleFont: { family: FONT, size: 15 }, bodyFont: { family: FONT, size: 15 },
+                       callbacks: { title: items => `Day ${items[0].parsed.x.toFixed(2)}` } } },
+        },
+    });
     charts.co2 = new Chart(document.getElementById('chart-co2'), {
         type: 'line',
         data: { datasets: [] },
@@ -424,31 +406,105 @@ function updateChartDataset(channelId) {
     });
 }
 
-function showAlertBanner(msg) {
-    const banner = document.getElementById('alert-banner');
-    banner.textContent = `Alert: ${msg}`;
-    banner.classList.add('active');
-    clearTimeout(alertBannerTimeout);
-    alertBannerTimeout = setTimeout(() => banner.classList.remove('active'), 10000);
+// ── CO2 evolution and biodegradation (ISO 14855-1 / ASTM D5338) ──────────────
+// The Apps Script keeps, per vessel, the area under (vessel CO2 - blank CO2)
+// since TEST_START in ppm x minutes. Grams of CO2 = area x 1e-6 x air flow
+// (L/min) x CO2 density; biodegradation = CO2 / ThCO2, with
+// ThCO2 = mass x carbon fraction x 44.01/12.011 (eq. 1 and 2 of the paper).
+const CO2_MOLAR_MASS = 44.01;
+const C_MOLAR_MASS = 12.011;
+
+function co2DensityGPerL() {
+    return EVOLUTION.pressure_kpa * 1000 * CO2_MOLAR_MASS / (8.314 * (EVOLUTION.gas_temp_c + 273.15)) / 1000;
 }
 
-function addAlertLogEntry(msg) {
-    const log = document.getElementById('alert-log');
-    const noAlerts = log.querySelector('.no-alerts');
-    if (noAlerts) noAlerts.remove();
+function thCO2(chId) {
+    const m = EVOLUTION.materials[chId];
+    if (!m || !m.mass_g || !m.carbon_fraction) return null;
+    return m.mass_g * m.carbon_fraction * CO2_MOLAR_MASS / C_MOLAR_MASS;
+}
 
-    const entry = document.createElement('div');
-    entry.className = 'alert-entry';
-    entry.innerHTML = `
-        <span class="alert-time">${new Date().toLocaleTimeString()}</span>
-        <span class="alert-msg">${escHtml(msg)}</span>
-    `;
-    log.appendChild(entry);
+function co2Grams(ppmMin) {
+    if (!EVOLUTION.air_flow_ml_min) return null;
+    return ppmMin * 1e-6 * EVOLUTION.air_flow_ml_min / 1000 * co2DensityGPerL();
+}
 
-    const entries = log.querySelectorAll('.alert-entry');
-    if (entries.length > ALERT_LOG_MAX) {
-        entries[0].remove();
+async function loadEvolution() {
+    let data;
+    try {
+        data = await fetchSheet({ cumulative: 1 });
+    } catch (err) {
+        return;
     }
+    const note = document.getElementById('evolution-note');
+    const cards = document.getElementById('evolution-cards');
+    cards.innerHTML = '';
+    if (!data.start || !data.latest || !data.latest.utc) {
+        note.textContent = data.start
+            ? `Counting from ${fmtLocal(data.start)}; waiting for the first readings.`
+            : 'Not started: set TEST_START in the Apps Script (Project Settings → Script properties) to the UTC time the vessels were loaded, e.g. 2026-11-05T15:00:00Z.';
+        charts.evolution.data.datasets = [];
+        charts.evolution.update('none');
+        return;
+    }
+
+    const start = Date.parse(data.start);
+    const haveFlow = !!EVOLUTION.air_flow_ml_min;
+    const mode = haveFlow ? 'pct' : 'area';
+    const days = (Date.parse(data.latest.utc) - start) / 86400000;
+    note.textContent = `Since ${fmtLocal(data.start)} (day ${days.toFixed(1)}). ` + (haveFlow
+        ? `Air flow ${EVOLUTION.air_flow_ml_min} mL/min per vessel; CO2 density ${co2DensityGPerL().toFixed(3)} g/L.`
+        : 'Enter the measured air flow per vessel in config.js (EVOLUTION.air_flow_ml_min) to convert to grams of CO2 and % biodegradation.');
+
+    const value = (chId, ppmMin) => {
+        const g = co2Grams(ppmMin);
+        const th = thCO2(chId);
+        if (mode === 'pct') return g != null && th ? g / th * 100 : null;
+        return ppmMin / 60;   // ppm x h
+    };
+
+    Object.keys(data.latest.net_ppm_min).forEach(chId => {
+        const ppmMin = data.latest.net_ppm_min[chId];
+        const g = co2Grams(ppmMin);
+        const th = thCO2(chId);
+        const div = document.createElement('div');
+        div.className = 'evolution-card';
+        div.id = `evo-${chId}`;
+        div.innerHTML = `
+            <div class="card-role">${escHtml(getChannelRole(chId))}</div>
+            <div class="card-name">${escHtml(getChannelLabel({ channel_id: chId }))}</div>
+            <div class="metric-row"><span class="metric-label">Net CO<sub>2</sub> evolved</span>
+                <span class="metric-value">${g != null ? `${fixed(g, 3)} g` : `${fixed(ppmMin / 60, 0)} ppm·h`}</span></div>
+            <div class="metric-row"><span class="metric-label">ThCO<sub>2</sub></span>
+                <span class="metric-value">${th ? `${th.toFixed(2)} g` : 'set mass and carbon'}</span></div>
+            <div class="metric-row metric-row-net"><span class="metric-label">Biodegradation</span>
+                <span class="metric-value">${g != null && th ? `${fixed(g / th * 100, 1)} %` : '-'}</span></div>`;
+        cards.appendChild(div);
+    });
+
+    charts.evolution.options.scales.y.title.text = mode === 'pct'
+        ? 'Biodegradation (net CO2 / ThCO2, %)' : 'Cumulative net CO2 (ppm·h)';
+    charts.evolution.data.datasets = data.columns.map((chId, i) => ({
+        label: getChannelLabel({ channel_id: chId }),
+        data: data.rows.map(r => ({ x: (Date.parse(r[0]) - start) / 86400000, y: value(chId, r[i + 1]) })),
+        borderColor: channelColors[chId] || getChannelColor(chId, i),
+        backgroundColor: 'transparent',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.1,
+    }));
+    charts.evolution.update('none');
+}
+
+// toFixed without "-0.000" for values that round to zero
+function fixed(v, digits) {
+    const s = Number(v).toFixed(digits);
+    return Number(s) === 0 ? Number(0).toFixed(digits) : s;
+}
+
+function fmtLocal(utc) {
+    return new Date(utc).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric',
+        year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
 }
 
 function isHidden(channelId) {

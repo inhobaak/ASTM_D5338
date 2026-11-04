@@ -13,12 +13,23 @@
 //   /exec?hours=24            rows from the last 24 h
 //   /exec?hours=168&step=300  last 7 days averaged into 5-minute buckets
 //   /exec?since=<utc>         only rows newer than <utc> (live polling)
+//   /exec?cumulative=1        cumulative net CO2 since TEST_START (see below)
 // Reading needs no token: anyone with the URL can see the data, as on the
 // public dashboard. Writing still needs TOKEN.
+//
+// Cumulative CO2 evolution: set the script property TEST_START to the UTC
+// time the vessels were loaded (e.g. 2026-11-05T15:00:00Z). From then on
+// every uploaded row adds the area under (vessel CO2 - blank CO2) to a running
+// total per vessel, in ppm x minutes (trapezoid rule, also across gaps). The
+// dashboard multiplies by the air flow and CO2 density to get grams of CO2.
+// A snapshot is stored every 10 min in the "cumulative" tab. Changing
+// TEST_START starts the totals again from the new time.
 
 const TAB_PREFIX = 'data_';
 const MAX_HOURS = 24 * 45;   // longest range one request may read
 const CHUNK = 5000;          // rows read per call while walking back in time
+const BLANK = 'blank';       // channel subtracted as the baseline
+const CUM_TAB = 'cumulative';
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -37,12 +48,14 @@ function doPost(e) {
 
     // Group new rows by month tab; utc is "" until the Pico has synced NTP.
     const byTab = {};
+    const fresh = [];
     let added = 0;
     body.rows.forEach(row => {
       const boot = row[1], uptime = Number(row[2]);
       if (boot === lastBoot && uptime <= lastUptime) return;  // already stored
       const month = row[0] ? String(row[0]).slice(0, 7) : 'unsynced';
       (byTab[month] = byTab[month] || []).push(row);
+      if (row[0]) fresh.push([String(row[0])].concat(row.slice(3)));
       lastBoot = boot;
       lastUptime = uptime;
       added++;
@@ -59,6 +72,11 @@ function doPost(e) {
 
     if (added) {
       props.setProperties({ LAST_BOOT: String(lastBoot), LAST_UPTIME: String(lastUptime) });
+      try {
+        integrate(body.header.slice(3), fresh);
+      } catch (err) {
+        console.error('cumulative update failed: ' + err);   // never lose an upload over it
+      }
     }
     return reply({ ok: true, added: added, skipped: body.rows.length - added });
   } catch (err) {
@@ -73,6 +91,7 @@ function doPost(e) {
 function doGet(e) {
   try {
     const p = (e && e.parameter) || {};
+    if (p.cumulative) return reply(readCumulative());
     const hours = Math.min(Number(p.hours) || 24, MAX_HOURS);
     const step = Math.max(Number(p.step) || 0, 0);
     const since = p.since
@@ -149,6 +168,74 @@ function average(rows, step) {
     }
   }
   flush();
+  return out;
+}
+
+// ── Cumulative CO2 evolution ────────────────────────────────────────────────
+// columns: value column names (no utc/boot/uptime); rows: [utc, values...]
+function integrate(columns, rows) {
+  const props = PropertiesService.getScriptProperties();
+  const start = props.getProperty('TEST_START');
+  if (!start) return;
+  const co2 = {};
+  columns.forEach((c, i) => { if (/_co2_ppm$/.test(c)) co2[c.replace(/_co2_ppm$/, '')] = i + 1; });
+  if (!(BLANK in co2)) return;
+  const vessels = Object.keys(co2).filter(ch => ch !== BLANK);
+
+  let st = JSON.parse(props.getProperty('CUM_STATE') || 'null');
+  if (!st || st.start !== start) {
+    // New test (or TEST_START changed): start over and back-fill from the sheet
+    st = { start: start, last_utc: null, last_net: {}, cum: {}, snap: null };
+    const tab = getTab(CUM_TAB, ['utc'].concat(vessels.map(v => v + '_net_ppm_min')));
+    if (tab.getLastRow() > 1) tab.deleteRows(2, tab.getLastRow() - 1);
+    rows = readSince(start).rows.concat(rows);
+  }
+
+  const snaps = [];
+  rows.forEach(row => {
+    const utc = row[0];
+    if (utc < start || (st.last_utc && utc <= st.last_utc)) return;
+    const blank = row[co2[BLANK]];
+    if (typeof blank !== 'number') return;
+    const net = {};
+    vessels.forEach(v => { if (typeof row[co2[v]] === 'number') net[v] = row[co2[v]] - blank; });
+    const minutes = st.last_utc ? (Date.parse(utc) - Date.parse(st.last_utc)) / 60000 : 0;
+    Object.keys(net).forEach(v => {
+      const prev = st.last_net[v];
+      st.cum[v] = (st.cum[v] || 0) + (prev == null ? net[v] : (prev + net[v]) / 2) * minutes;
+      st.last_net[v] = net[v];
+    });
+    st.last_utc = utc;
+    const slot = utc.slice(0, 15);          // 10-minute slot, e.g. 2026-11-05T15:4
+    if (st.snap !== slot) {
+      st.snap = slot;
+      snaps.push([utc].concat(vessels.map(v => Math.round((st.cum[v] || 0) * 10) / 10)));
+    }
+  });
+
+  props.setProperty('CUM_STATE', JSON.stringify(st));
+  if (snaps.length) {
+    const tab = getTab(CUM_TAB, ['utc'].concat(vessels.map(v => v + '_net_ppm_min')));
+    const first = tab.getLastRow() + 1;
+    tab.getRange(first, 1, snaps.length, 1).setNumberFormat('@');
+    tab.getRange(first, 1, snaps.length, snaps[0].length).setValues(snaps);
+  }
+}
+
+function readCumulative() {
+  const props = PropertiesService.getScriptProperties();
+  const start = props.getProperty('TEST_START');
+  const st = JSON.parse(props.getProperty('CUM_STATE') || 'null');
+  const out = { ok: true, start: start || null, columns: [], rows: [], latest: null };
+  if (!start || !st || st.start !== start) return out;
+  const tab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CUM_TAB);
+  if (tab && tab.getLastRow() > 1) {
+    const width = tab.getLastColumn();
+    const values = tab.getRange(1, 1, tab.getLastRow(), width).getValues();
+    out.columns = values[0].slice(1).map(c => String(c).replace(/_net_ppm_min$/, ''));
+    out.rows = values.slice(1).map(r => [r[0] instanceof Date ? r[0].toISOString().slice(0, 19) + 'Z' : String(r[0])].concat(r.slice(1)));
+  }
+  out.latest = { utc: st.last_utc, net_ppm_min: st.cum, net_ppm: st.last_net };
   return out;
 }
 

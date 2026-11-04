@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>D5338 · CO₂ Monitor</title>
     <link rel="icon" href="assets/cornell-seal-red.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="style.css?v=6">
+    <link rel="stylesheet" href="style.css?v=7">
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-    <script src="config.js?v=6"></script>
+    <script src="config.js?v=7"></script>
 </head>
 <body>
 
@@ -36,8 +36,6 @@
     </div>
 </header>
 
-<div class="alert-banner" id="alert-banner"></div>
-
 <main>
     <section class="overview-panel">
         <div>
@@ -50,6 +48,22 @@
     <div class="channel-cards" id="channel-cards">
         <p class="loading-state">Loading…</p>
     </div>
+
+    <section class="evolution">
+        <p class="section-title">CO<sub>2</sub> evolution</p>
+        <h2>Cumulative CO<sub>2</sub> and biodegradation</h2>
+        <p class="chart-note" id="evolution-note">Loading…</p>
+        <div class="evolution-cards" id="evolution-cards"></div>
+        <div class="chart-container">
+            <canvas id="chart-evolution"></canvas>
+        </div>
+        <p class="formula">
+            Net CO<sub>2</sub> (g) = air flow × ∫ (CO<sub>2,vessel</sub> − CO<sub>2,blank</sub>) dt × ρ<sub>CO<sub>2</sub></sub>
+            &nbsp;·&nbsp; ThCO<sub>2</sub> = mass × carbon fraction × 44/12
+            &nbsp;·&nbsp; Biodegradation (%) = net CO<sub>2</sub> / ThCO<sub>2</sub> × 100.
+            The blank vessel (compost only) is the baseline, so room CO<sub>2</sub> in the inlet air and compost respiration cancel out.
+        </p>
+    </section>
 
     <div class="charts">
         <div class="chart-container chart-container-primary">
@@ -71,17 +85,13 @@
         </div>
     </div>
 
-    <div class="alert-log" id="alert-log">
-        <h3>Alerts</h3>
-        <p class="no-alerts">No alerts yet.</p>
-    </div>
 </main>
 
 <footer>
     <p>Cornell University · College of Agriculture and Life Sciences</p>
-    <p class="footer-note">Readings are 30-second averages from three SCD-30 sensors, uploaded to Google Sheets as they are taken. Times shown in Eastern time.</p>
+    <p class="footer-note">Each reading is a 30-second average from three SCD-30 sensors, sent to Google Sheets every 30 seconds. Times are US Eastern.</p>
 </footer>
 
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>
