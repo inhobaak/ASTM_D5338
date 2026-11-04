@@ -290,6 +290,7 @@ function checkAlertThresholds(r) {
 }
 
 function initCharts() {
+    Chart.defaults.font.family = "Arial, Helvetica, sans-serif";
     const TZ = 'America/New_York';
     const fmtTickHour = (v) => new Date(v).toLocaleString('en-US',
         { timeZone: TZ, hour: 'numeric', hour12: true });

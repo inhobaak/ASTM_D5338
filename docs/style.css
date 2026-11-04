@@ -1,5 +1,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+button { font-family: inherit; }
+
 /* Cornell CALS palette (cals.cornell.edu brand guide: color & typography) */
 :root {
     --cornell-red:  #B31B1B;   /* primary */
@@ -40,7 +42,7 @@
 }
 
 body {
-    font-family: "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+    font-family: Arial, Helvetica, sans-serif;
     background: var(--surface-2);
     color: var(--text);
     min-height: 100vh;
