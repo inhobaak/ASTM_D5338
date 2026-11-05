@@ -280,7 +280,10 @@ main {
     flex-direction: column;
 }
 
-.chart-container canvas { flex: 1 1 auto; min-height: 0; width: 100%; }
+/* Chart.js sizes the chart to its parent, so the canvas gets a wrapper of its
+   own below the title; otherwise it is drawn at the full box height and then
+   squeezed, which distorts lines and text. */
+.chart-box { position: relative; flex: 1 1 auto; min-height: 0; width: 100%; }
 
 .chart-container-primary { height: 520px; }
 
@@ -324,7 +327,7 @@ footer .footer-note { color: var(--gray-4); font-size: 0.78rem; }
     .overview-panel { grid-template-columns: 1fr; }
     .channel-cards  { grid-template-columns: 1fr; }
     .chart-container { height: 320px; padding: var(--space-3); }
-    .chart-container-primary { height: 360px; }
+    .chart-container-primary { height: 440px; }
 }
 
 /* CO2 evolution */
