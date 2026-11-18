@@ -83,6 +83,20 @@ Script properties:
 Forgot to press Pause? Add or fix the row in the `pauses` tab by hand (UTC,
 e.g. `2026-11-20T14:05:00Z`). The totals are recounted on the next upload.
 
+## Starting a new test from scratch
+
+In the Apps Script editor, pick **startNewTest** in the function menu and
+press **Run**. It:
+
+- deletes every `data_` tab, the `cumulative` tab and the `pauses` tab,
+- sets `TEST_START` to that moment, so the CO2 evolution starts at zero,
+- drops any older rows the Pico still had queued.
+
+The Pico keeps running; new rows appear in a fresh `data_` tab within 30 s.
+Reload the dashboard afterwards. This cannot be undone except through
+**File → Version history**, so use **File → Make a copy** first if you want
+to keep the old data. It can only be run from the editor, not from the web.
+
 ## settings.toml keys
 
 ```toml

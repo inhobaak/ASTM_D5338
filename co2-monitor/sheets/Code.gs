@@ -37,6 +37,9 @@
 // upload. Set CONTROL_KEY (the 4-digit PIN asked on every pause and resume)
 // in the script properties. After 5 wrong PINs in a row the button is locked
 // for 15 minutes.
+//
+// New test from scratch: run startNewTest() from the editor. It deletes all
+// logged data, the totals and the pauses, and sets TEST_START to now.
 
 const TAB_PREFIX = 'data_';
 const MAX_HOURS = 24 * 45;   // longest range one request may read
@@ -64,6 +67,9 @@ function doPost(e) {
     let lastBoot = props.getProperty('LAST_BOOT');
     let lastUptime = Number(props.getProperty('LAST_UPTIME') || -1);
 
+    // Rows from before startNewTest() still queued on the Pico are dropped
+    const wipedAt = props.getProperty('WIPED_AT') || '';
+
     // Group new rows by month tab; utc is "" until the Pico has synced NTP.
     const byTab = {};
     const fresh = [];
@@ -71,6 +77,7 @@ function doPost(e) {
     body.rows.forEach(row => {
       const boot = row[1], uptime = Number(row[2]);
       if (boot === lastBoot && uptime <= lastUptime) return;  // already stored
+      if (row[0] && String(row[0]) < wipedAt) return;         // older than the wipe
       const month = row[0] ? String(row[0]).slice(0, 7) : 'unsynced';
       (byTab[month] = byTab[month] || []).push(row);
       if (row[0]) fresh.push([String(row[0])].concat(row.slice(3)));
@@ -212,7 +219,8 @@ function integrate(columns, rows) {
     // New test (or TEST_START changed): start over and back-fill from the sheet
     st = { start: start, last_utc: null, last_net: {}, cum: {}, snap: null };
     const tab = getTab(CUM_TAB, ['utc'].concat(vessels.map(v => v + '_net_ppm_min')));
-    if (tab.getLastRow() > 1) tab.deleteRows(2, tab.getLastRow() - 1);
+    // clearContent, not deleteRows: Sheets refuses to delete every unfrozen row
+    if (tab.getLastRow() > 1) tab.getRange(2, 1, tab.getLastRow() - 1, tab.getLastColumn()).clearContent();
     // readSince is "newer than", so step back 1 s to include a row at start
     rows = readSince(iso(Date.parse(start) - 1000)).rows.concat(rows)
       .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
@@ -350,6 +358,35 @@ function pauseSig(pauses, lastUtc) {
 // Run from the editor to rebuild the totals from the sheet on the next upload
 function recomputeEvolution() {
   PropertiesService.getScriptProperties().deleteProperty('CUM_STATE');
+}
+
+// Run from the editor (select startNewTest, then Run) to wipe the sheet and
+// start a new test now. Deletes every data_ tab, the cumulative tab and the
+// pauses tab, and sets TEST_START to this moment. The Pico keeps uploading,
+// so new rows start a fresh data_ tab within 30 s. Cannot be undone, except
+// through File → Version history. Not reachable from the web on purpose.
+function startNewTest() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);                     // don't race an upload
+  try {
+    const now = iso(Date.now());
+    const doomed = ss.getSheets().filter(s => {
+      const n = s.getName();
+      return n.indexOf(TAB_PREFIX) === 0 || n === CUM_TAB || n === PAUSE_TAB;
+    });
+    // A spreadsheet must keep one tab
+    if (doomed.length === ss.getSheets().length) ss.insertSheet('readme')
+      .getRange(1, 1).setValue('Data tabs appear here as the Pico uploads.');
+    doomed.forEach(s => ss.deleteSheet(s));
+    const props = PropertiesService.getScriptProperties();
+    props.deleteProperty('CUM_STATE');
+    props.deleteProperty('CONTROL_FAILS');
+    props.setProperties({ TEST_START: now, WIPED_AT: now });
+    console.log('Deleted ' + doomed.length + ' tabs. TEST_START = ' + now);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function toUtc(v) {
