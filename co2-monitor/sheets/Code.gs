@@ -34,7 +34,9 @@
 // before the pause to the first good row after it (linear interpolation).
 // The settling time covers the headspace refilling with CO2 after the vessel
 // was open. Editing the pauses tab by hand recomputes the totals on the next
-// upload. Set CONTROL_KEY (any passphrase) in the script properties.
+// upload. Set CONTROL_KEY (the 4-digit PIN asked on every pause and resume)
+// in the script properties. After 5 wrong PINs in a row the button is locked
+// for 15 minutes.
 
 const TAB_PREFIX = 'data_';
 const MAX_HOURS = 24 * 45;   // longest range one request may read
@@ -43,6 +45,8 @@ const BLANK = 'blank';       // channel subtracted as the baseline
 const CUM_TAB = 'cumulative';
 const PAUSE_TAB = 'pauses';
 const SETTLE_MIN_DEFAULT = 15;
+const MAX_PIN_TRIES = 5;     // wrong PINs in a row before pausing is locked
+const PIN_LOCK_MIN = 15;     // minutes the lock lasts
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -269,7 +273,21 @@ function control(body) {
   const props = PropertiesService.getScriptProperties();
   const key = props.getProperty('CONTROL_KEY');
   if (!key) return { ok: false, error: 'CONTROL_KEY is not set in the script properties' };
-  if (body.key !== key) return { ok: false, error: 'bad key' };
+  // A 4-digit PIN is easy to guess by script, so lock after a few wrong tries
+  const fails = JSON.parse(props.getProperty('CONTROL_FAILS') || '{"n":0,"until":0}');
+  if (Date.now() < fails.until) {
+    return { ok: false, error: 'locked', retry_min: Math.ceil((fails.until - Date.now()) / 60000) };
+  }
+  if (String(body.key || '') !== String(key).trim()) {
+    fails.n++;
+    if (fails.n >= MAX_PIN_TRIES) {
+      props.setProperty('CONTROL_FAILS', JSON.stringify({ n: 0, until: Date.now() + PIN_LOCK_MIN * 60000 }));
+      return { ok: false, error: 'locked', retry_min: PIN_LOCK_MIN };
+    }
+    props.setProperty('CONTROL_FAILS', JSON.stringify(fails));
+    return { ok: false, error: 'bad key', left: MAX_PIN_TRIES - fails.n };
+  }
+  if (fails.n) props.setProperty('CONTROL_FAILS', JSON.stringify({ n: 0, until: 0 }));
 
   const tab = getTab(PAUSE_TAB, ['start_utc', 'end_utc', 'note']);
   const n = tab.getLastRow() - 1;

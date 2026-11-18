@@ -38,11 +38,11 @@ let pauses = [];           // [{ start: ms, end: ms | null, note }]
 let settleMs = 15 * 60000; // after a resume, also left out while the headspace refills
 let pausedNow = false;
 let evolutionStart = null; // ms, for drawing bands on the days axis
-const KEY_STORE = 'd5338-control-key';
 
 document.addEventListener('DOMContentLoaded', async () => {
     initCharts();
     document.getElementById('rec-form').addEventListener('submit', toggleRecording);
+    try { localStorage.removeItem('d5338-control-key'); } catch (e) { /* an earlier version stored the key */ }
     if (!SHEETS_URL) {
         showStatus('Set SHEETS_URL in config.js to the Apps Script /exec URL.');
         return;
@@ -351,16 +351,6 @@ function renderRecordingPanel() {
     }
 }
 
-function readKey() {
-    try { return localStorage.getItem(KEY_STORE) || ''; } catch (e) { return ''; }
-}
-function saveKey(key) {
-    try { localStorage.setItem(KEY_STORE, key); } catch (e) { /* key is asked again next time */ }
-}
-function forgetKey() {
-    try { localStorage.removeItem(KEY_STORE); } catch (e) { /* nothing stored */ }
-}
-
 function showRecError(msg) {
     const el = document.getElementById('rec-error');
     el.textContent = msg || '';
@@ -369,18 +359,15 @@ function showRecError(msg) {
 
 async function toggleRecording(ev) {
     ev.preventDefault();
-    const keyInput = document.getElementById('rec-key');
+    // The PIN is asked every time and never stored in the browser
+    const pinInput = document.getElementById('rec-key');
     const button = document.getElementById('rec-button');
     const note = document.getElementById('rec-note');
-    let key = readKey();
-    if (!key) {
-        key = keyInput.value.trim();
-        if (!key) {
-            keyInput.hidden = false;
-            keyInput.focus();
-            showRecError('Enter the control key (CONTROL_KEY in the Apps Script). This browser remembers it.');
-            return;
-        }
+    const key = pinInput.value.trim();
+    if (!/^\d{4}$/.test(key)) {
+        pinInput.focus();
+        showRecError('Enter the 4-digit PIN.');
+        return;
     }
     const action = pausedNow ? 'resume' : 'pause';
     button.disabled = true;
@@ -389,24 +376,20 @@ async function toggleRecording(ev) {
         // A plain-text body keeps this a "simple" request, which Apps Script accepts
         const res = await fetch(SHEETS_URL, {
             method: 'POST',
-            body: JSON.stringify({ action, key, note: note.value.trim() }),
+            body: JSON.stringify({ action, key, note: action === 'pause' ? note.value.trim() : '' }),
         });
         const data = await res.json();
         if (!data.ok) {
             if (data.error === 'bad key') {
-                forgetKey();
-                keyInput.value = '';
-                keyInput.hidden = false;
-                keyInput.focus();
-                showRecError('Wrong control key. Enter the CONTROL_KEY from the Apps Script.');
+                pinInput.focus();
+                showRecError(`Wrong PIN. ${data.left} ${data.left === 1 ? 'try' : 'tries'} left before a 15-minute lock.`);
+            } else if (data.error === 'locked') {
+                showRecError(`Too many wrong PINs. Try again in ${data.retry_min} min.`);
             } else {
                 showRecError(`Not ${action}d: ${data.error}`);
             }
             return;
         }
-        saveKey(key);
-        keyInput.value = '';
-        keyInput.hidden = true;
         note.value = '';
         applyPauseInfo(data);
         redrawBands();
@@ -414,6 +397,7 @@ async function toggleRecording(ev) {
     } catch (err) {
         showRecError(`Couldn't reach Google Sheets (${err.message}). Nothing changed; try again.`);
     } finally {
+        pinInput.value = '';
         button.disabled = false;
     }
 }

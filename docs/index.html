@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>D5338 · CO₂ Monitor</title>
     <link rel="icon" href="assets/cornell-seal-red.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="style.css?v=9">
+    <link rel="stylesheet" href="style.css?v=10">
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-    <script src="config.js?v=9"></script>
+    <script src="config.js?v=10"></script>
 </head>
 <body>
 
@@ -47,7 +47,7 @@
         </div>
         <form class="rec-form" id="rec-form">
             <input id="rec-note" type="text" maxlength="200" placeholder="Reason, e.g. ice refill" aria-label="Reason for pausing">
-            <input id="rec-key" type="password" placeholder="Control key" aria-label="Control key" autocomplete="current-password" hidden>
+            <input id="rec-key" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="4-digit PIN" aria-label="4-digit PIN" autocomplete="off">
             <button type="submit" id="rec-button">Pause recording</button>
         </form>
         <p class="rec-error" id="rec-error" hidden></p>
@@ -110,6 +110,6 @@
     <p class="footer-note">Each reading is a 30-second average from three SCD-30 sensors, sent to Google Sheets every 30 seconds. Times are US Eastern.</p>
 </footer>
 
-<script src="app.js?v=9"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

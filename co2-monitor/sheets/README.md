@@ -77,7 +77,7 @@ Script properties:
 
 | Property | Meaning |
 |---|---|
-| `CONTROL_KEY` | Passphrase the dashboard asks for once per browser. Required for the button. |
+| `CONTROL_KEY` | 4-digit PIN typed on every Pause and Resume (never stored in the browser). After 5 wrong PINs in a row the button locks for 15 min. Keep it out of GitHub. |
 | `SETTLE_MIN` | Minutes after a resume still left out (default 15). Use about 3 × headspace volume ÷ air flow, e.g. 0.5 L ÷ 0.1 L/min × 3 = 15 min. |
 
 Forgot to press Pause? Add or fix the row in the `pauses` tab by hand (UTC,
