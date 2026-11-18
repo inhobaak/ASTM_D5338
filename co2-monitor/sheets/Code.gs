@@ -24,18 +24,32 @@
 // dashboard multiplies by the air flow and CO2 density to get grams of CO2.
 // A snapshot is stored every 10 min in the "cumulative" tab. Changing
 // TEST_START starts the totals again from the new time.
+//
+// Pausing (ice refill, watering): the dashboard's Pause button POSTs
+//   {"action": "pause" | "resume" | "status", "key": CONTROL_KEY, "note": "..."}
+// and each pause becomes a row in the "pauses" tab (start_utc, end_utc, note).
+// The Pico keeps logging raw data, but rows from the start of a pause until
+// SETTLE_MIN minutes (default 15) after it ends are left out of the
+// cumulative totals: the trapezoid then runs straight from the last good row
+// before the pause to the first good row after it (linear interpolation).
+// The settling time covers the headspace refilling with CO2 after the vessel
+// was open. Editing the pauses tab by hand recomputes the totals on the next
+// upload. Set CONTROL_KEY (any passphrase) in the script properties.
 
 const TAB_PREFIX = 'data_';
 const MAX_HOURS = 24 * 45;   // longest range one request may read
 const CHUNK = 5000;          // rows read per call while walking back in time
 const BLANK = 'blank';       // channel subtracted as the baseline
 const CUM_TAB = 'cumulative';
+const PAUSE_TAB = 'pauses';
+const SETTLE_MIN_DEFAULT = 15;
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     const body = JSON.parse(e.postData.contents);
+    if (body.action) return reply(control(body));
     const token = PropertiesService.getScriptProperties().getProperty('TOKEN');
     if (!token || body.token !== token) return reply({ ok: false, error: 'bad token' });
     if (!Array.isArray(body.header) || !Array.isArray(body.rows)) {
@@ -91,7 +105,7 @@ function doPost(e) {
 function doGet(e) {
   try {
     const p = (e && e.parameter) || {};
-    if (p.cumulative) return reply(readCumulative());
+    if (p.cumulative) return reply(Object.assign(readCumulative(), pauseInfo()));
     const hours = Math.min(Number(p.hours) || 24, MAX_HOURS);
     const step = Math.max(Number(p.step) || 0, 0);
     const since = p.since
@@ -99,8 +113,8 @@ function doGet(e) {
       : new Date(Date.now() - hours * 3600 * 1000).toISOString().slice(0, 19) + 'Z';
 
     const data = readSince(since);
-    const out = { ok: true, service: 'd5338-co2-logger', columns: data.columns,
-                  latest: data.rows.length ? data.rows[data.rows.length - 1] : null };
+    const out = Object.assign({ ok: true, service: 'd5338-co2-logger', columns: data.columns,
+                  latest: data.rows.length ? data.rows[data.rows.length - 1] : null }, pauseInfo());
     if (p.hours || p.since) out.rows = step ? average(data.rows, step) : data.rows;
     return reply(out);
   } catch (err) {
@@ -182,19 +196,29 @@ function integrate(columns, rows) {
   if (!(BLANK in co2)) return;
   const vessels = Object.keys(co2).filter(ch => ch !== BLANK);
 
+  const pauses = readPauses();
+  const excluded = excludedWindows(pauses);
+  const isExcluded = utc => excluded.some(w => utc >= w[0] && utc < w[1]);
+
   let st = JSON.parse(props.getProperty('CUM_STATE') || 'null');
-  if (!st || st.start !== start) {
+  // A pause that starts before rows already counted means the pauses tab was
+  // edited after the fact (or a pause was deleted): count everything again.
+  const edited = st && (st.pause_sig || '[]') !== pauseSig(pauses, st.last_utc);
+  if (!st || st.start !== start || edited) {
     // New test (or TEST_START changed): start over and back-fill from the sheet
     st = { start: start, last_utc: null, last_net: {}, cum: {}, snap: null };
     const tab = getTab(CUM_TAB, ['utc'].concat(vessels.map(v => v + '_net_ppm_min')));
     if (tab.getLastRow() > 1) tab.deleteRows(2, tab.getLastRow() - 1);
-    rows = readSince(start).rows.concat(rows);
+    // readSince is "newer than", so step back 1 s to include a row at start
+    rows = readSince(iso(Date.parse(start) - 1000)).rows.concat(rows)
+      .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
   }
 
   const snaps = [];
   rows.forEach(row => {
     const utc = row[0];
     if (utc < start || (st.last_utc && utc <= st.last_utc)) return;
+    if (isExcluded(utc)) return;            // paused or settling: bridged by the next good row
     const blank = row[co2[BLANK]];
     if (typeof blank !== 'number') return;
     const net = {};
@@ -213,6 +237,7 @@ function integrate(columns, rows) {
     }
   });
 
+  st.pause_sig = pauseSig(pauses, st.last_utc);
   props.setProperty('CUM_STATE', JSON.stringify(st));
   if (snaps.length) {
     const tab = getTab(CUM_TAB, ['utc'].concat(vessels.map(v => v + '_net_ppm_min')));
@@ -237,6 +262,86 @@ function readCumulative() {
   }
   out.latest = { utc: st.last_utc, net_ppm_min: st.cum, net_ppm: st.last_net };
   return out;
+}
+
+// ── Pause / resume ──────────────────────────────────────────────────────────
+function control(body) {
+  const props = PropertiesService.getScriptProperties();
+  const key = props.getProperty('CONTROL_KEY');
+  if (!key) return { ok: false, error: 'CONTROL_KEY is not set in the script properties' };
+  if (body.key !== key) return { ok: false, error: 'bad key' };
+
+  const tab = getTab(PAUSE_TAB, ['start_utc', 'end_utc', 'note']);
+  const n = tab.getLastRow() - 1;
+  const values = n > 0 ? tab.getRange(2, 1, n, 3).getValues() : [];
+  let open = -1;                            // sheet row of the pause still running
+  values.forEach((r, i) => { if (r[0] !== '' && r[1] === '') open = i + 2; });
+  const now = iso(Date.now());
+
+  if (body.action === 'pause') {
+    if (open < 0) {
+      let startUtc = now;
+      // never start a pause inside rows that are already counted
+      const st = JSON.parse(props.getProperty('CUM_STATE') || 'null');
+      if (st && st.last_utc && st.last_utc >= startUtc) startUtc = iso(Date.parse(st.last_utc) + 1000);
+      const note = String(body.note || '').replace(/^[=+\-@\s]+/, '').slice(0, 200);
+      const row = n + 2;
+      tab.getRange(row, 1, 1, 3).setNumberFormat('@');
+      tab.getRange(row, 1, 1, 3).setValues([[startUtc, '', note]]);
+    }
+  } else if (body.action === 'resume') {
+    if (open > 0) tab.getRange(open, 2).setNumberFormat('@').setValue(now);
+  } else if (body.action !== 'status') {
+    return { ok: false, error: 'unknown action' };
+  }
+  return Object.assign({ ok: true }, pauseInfo());
+}
+
+// [{start, end, note}], oldest first; end is null while the pause runs.
+function readPauses() {
+  const tab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(PAUSE_TAB);
+  if (!tab || tab.getLastRow() < 2) return [];
+  return tab.getRange(2, 1, tab.getLastRow() - 1, 3).getValues()
+    .map(r => ({ start: toUtc(r[0]), end: r[1] === '' ? null : toUtc(r[1]), note: String(r[2] || '') }))
+    .filter(p => p.start && p.end !== '')
+    .sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
+}
+
+function pauseInfo() {
+  const pauses = readPauses();
+  return { pauses: pauses, paused: pauses.some(p => !p.end), settle_min: settleMinutes() };
+}
+
+function settleMinutes() {
+  const raw = PropertiesService.getScriptProperties().getProperty('SETTLE_MIN');
+  const v = Number(raw);
+  return raw !== null && raw !== '' && isFinite(v) && v >= 0 ? v : SETTLE_MIN_DEFAULT;
+}
+
+// [from, to) utc ranges left out of the totals: each pause plus settling time
+function excludedWindows(pauses) {
+  const settle = settleMinutes() * 60000;
+  return pauses.map(p => [p.start, p.end ? iso(Date.parse(p.end) + settle) : '9999']);
+}
+
+// The pauses that overlap rows already counted, to notice later edits
+function pauseSig(pauses, lastUtc) {
+  return JSON.stringify(pauses.filter(p => lastUtc && p.start <= lastUtc).map(p => [p.start, p.end]));
+}
+
+// Run from the editor to rebuild the totals from the sheet on the next upload
+function recomputeEvolution() {
+  PropertiesService.getScriptProperties().deleteProperty('CUM_STATE');
+}
+
+function toUtc(v) {
+  if (v === '' || v == null) return '';
+  const t = v instanceof Date ? v.getTime() : Date.parse(String(v).trim());
+  return isNaN(t) ? '' : iso(t);
+}
+
+function iso(t) {
+  return new Date(t).toISOString().slice(0, 19) + 'Z';
 }
 
 function getTab(name, header) {

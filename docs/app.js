@@ -33,8 +33,16 @@ let lastUtc = null;
 let selectedRange = '24h';
 let lastPointTime = null;  // to break chart lines where data is missing
 
+// Pauses (vessel or cold trap open), from the Apps Script "pauses" tab
+let pauses = [];           // [{ start: ms, end: ms | null, note }]
+let settleMs = 15 * 60000; // after a resume, also left out while the headspace refills
+let pausedNow = false;
+let evolutionStart = null; // ms, for drawing bands on the days axis
+const KEY_STORE = 'd5338-control-key';
+
 document.addEventListener('DOMContentLoaded', async () => {
     initCharts();
+    document.getElementById('rec-form').addEventListener('submit', toggleRecording);
     if (!SHEETS_URL) {
         showStatus('Set SHEETS_URL in config.js to the Apps Script /exec URL.');
         return;
@@ -116,7 +124,7 @@ function addPoints(row) {
             Object.values(METRICS).forEach(k => channelData[chId][k].push({ x: mid, y: null }));
         }
         const r = toReading(row, chId);
-        channelData[chId].net.push({ x: t, y: r.net_ppm });
+        channelData[chId].net.push({ x: t, y: excludedAt(t.getTime()) ? null : r.net_ppm });
         channelData[chId].co2.push({ x: t, y: r.co2_ppm });
         channelData[chId].temp.push({ x: t, y: r.temp_c });
         channelData[chId].humidity.push({ x: t, y: r.humidity_rh });
@@ -133,6 +141,7 @@ async function loadHistoricalData() {
         return;
     }
 
+    applyPauseInfo(data);
     columnIndex = indexColumns(data.columns);
     columnsKey = data.columns.join(',');
     channelData = {};
@@ -157,7 +166,8 @@ async function pollNewRows() {
         return;   // keep showing what we have; the next poll tries again
     }
     if (data.columns.join(',') !== columnsKey) return loadHistoricalData();  // channels changed
-    if (!data.rows.length) return;
+    applyPauseInfo(data);
+    if (!data.rows.length) return redrawBands();
 
     data.rows.forEach(row => {
         addPoints(row);
@@ -285,7 +295,167 @@ function startOfflineCheck() {
             card.className = `channel-card ${statusFor(lastSeen)}`;
             card.querySelector('.last-seen').textContent = `Last: ${timeAgo(new Date(lastSeen))}`;
         });
+        renderRecordingPanel();
     }, 60000);
+}
+
+// ── Pause / resume ───────────────────────────────────────────────────────────
+// Before opening a vessel (watering) or the cold trap (ice), press Pause; press
+// Resume once everything is closed again. The Pico keeps logging, but those
+// rows plus the settling time after the resume are left out of the CO2
+// evolution, which is interpolated across them (see Code.gs).
+function applyPauseInfo(data) {
+    if (!data || !Array.isArray(data.pauses)) return;   // Apps Script without pausing
+    pauses = data.pauses.map(p => ({
+        start: Date.parse(p.start), end: p.end ? Date.parse(p.end) : null, note: p.note || '' }));
+    if (typeof data.settle_min === 'number') settleMs = data.settle_min * 60000;
+    pausedNow = !!data.paused;
+    document.getElementById('recording-panel').hidden = false;
+    renderRecordingPanel();
+}
+
+function excludedAt(t) {
+    return pauses.some(p => t >= p.start && (p.end == null || t < p.end + settleMs));
+}
+
+function renderRecordingPanel() {
+    const panel = document.getElementById('recording-panel');
+    if (panel.hidden) return;
+    const title = document.getElementById('rec-title');
+    const detail = document.getElementById('rec-detail');
+    const button = document.getElementById('rec-button');
+    const note = document.getElementById('rec-note');
+    const open = pauses.find(p => p.end == null);
+    const last = pauses.filter(p => p.end != null).sort((a, b) => b.end - a.end)[0];
+    const settlingUntil = last ? last.end + settleMs : 0;
+
+    panel.classList.toggle('paused', !!open);
+    panel.classList.toggle('settling', !open && Date.now() < settlingUntil);
+    if (open) {
+        const mins = Math.max(0, Math.round((Date.now() - open.start) / 60000));
+        title.textContent = `Paused since ${fmtClock(open.start)} (${mins} min)`;
+        detail.textContent = (open.note ? `${open.note}. ` : '')
+            + 'Readings are still logged but left out of the CO₂ evolution. Press Resume once the vessels and the cold trap are closed again.';
+        button.textContent = 'Resume recording';
+        note.hidden = true;
+    } else if (Date.now() < settlingUntil) {
+        title.textContent = `Recording · settling until ${fmtClock(settlingUntil)}`;
+        detail.textContent = `Readings for ${Math.round(settleMs / 60000)} min after the resume are left out while the headspace refills with CO₂.`;
+        button.textContent = 'Pause recording';
+        note.hidden = false;
+    } else {
+        title.textContent = 'Recording';
+        detail.textContent = 'Press Pause before opening a vessel or the cold trap (water, ice).';
+        button.textContent = 'Pause recording';
+        note.hidden = false;
+    }
+}
+
+function readKey() {
+    try { return localStorage.getItem(KEY_STORE) || ''; } catch (e) { return ''; }
+}
+function saveKey(key) {
+    try { localStorage.setItem(KEY_STORE, key); } catch (e) { /* key is asked again next time */ }
+}
+function forgetKey() {
+    try { localStorage.removeItem(KEY_STORE); } catch (e) { /* nothing stored */ }
+}
+
+function showRecError(msg) {
+    const el = document.getElementById('rec-error');
+    el.textContent = msg || '';
+    el.hidden = !msg;
+}
+
+async function toggleRecording(ev) {
+    ev.preventDefault();
+    const keyInput = document.getElementById('rec-key');
+    const button = document.getElementById('rec-button');
+    const note = document.getElementById('rec-note');
+    let key = readKey();
+    if (!key) {
+        key = keyInput.value.trim();
+        if (!key) {
+            keyInput.hidden = false;
+            keyInput.focus();
+            showRecError('Enter the control key (CONTROL_KEY in the Apps Script). This browser remembers it.');
+            return;
+        }
+    }
+    const action = pausedNow ? 'resume' : 'pause';
+    button.disabled = true;
+    showRecError('');
+    try {
+        // A plain-text body keeps this a "simple" request, which Apps Script accepts
+        const res = await fetch(SHEETS_URL, {
+            method: 'POST',
+            body: JSON.stringify({ action, key, note: note.value.trim() }),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+            if (data.error === 'bad key') {
+                forgetKey();
+                keyInput.value = '';
+                keyInput.hidden = false;
+                keyInput.focus();
+                showRecError('Wrong control key. Enter the CONTROL_KEY from the Apps Script.');
+            } else {
+                showRecError(`Not ${action}d: ${data.error}`);
+            }
+            return;
+        }
+        saveKey(key);
+        keyInput.value = '';
+        keyInput.hidden = true;
+        note.value = '';
+        applyPauseInfo(data);
+        redrawBands();
+        loadEvolution();
+    } catch (err) {
+        showRecError(`Couldn't reach Google Sheets (${err.message}). Nothing changed; try again.`);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+// Paused time as a dark band, settling time as a light band, on every chart
+const pauseBandsPlugin = {
+    id: 'pauseBands',
+    beforeDatasetsDraw(chart) {
+        if (!pauses.length) return;
+        let toX = t => t;
+        if (chart === charts.evolution) {
+            if (evolutionStart == null) return;
+            toX = t => (t - evolutionStart) / 86400000;
+        }
+        const { ctx, chartArea: a, scales: { x } } = chart;
+        const fill = (from, to, color) => {
+            const x0 = Math.max(x.getPixelForValue(toX(from)), a.left);
+            const x1 = Math.min(x.getPixelForValue(toX(to)), a.right);
+            if (!(x1 > x0)) return;
+            ctx.fillStyle = color;
+            ctx.fillRect(x0, a.top, x1 - x0, a.bottom - a.top);
+        };
+        const panel = document.getElementById('recording-panel');
+        const css = getComputedStyle(panel);
+        const now = Date.now();
+        ctx.save();
+        pauses.forEach(p => {
+            const end = p.end == null ? now : p.end;
+            fill(p.start, end, css.getPropertyValue('--band-pause').trim());
+            if (p.end != null) fill(p.end, Math.min(p.end + settleMs, now), css.getPropertyValue('--band-settle').trim());
+        });
+        ctx.restore();
+    },
+};
+
+function redrawBands() {
+    Object.values(charts).forEach(c => c.update('none'));
+}
+
+function fmtClock(ms) {
+    return new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York',
+        hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
 function initCharts() {
@@ -340,11 +510,13 @@ function initCharts() {
 
     charts.net = new Chart(document.getElementById('chart-net'), {
         type: 'line',
+        plugins: [pauseBandsPlugin],
         data: { datasets: [] },
         options: { ...commonOpts },
     });
     charts.evolution = new Chart(document.getElementById('chart-evolution'), {
         type: 'line',
+        plugins: [pauseBandsPlugin],
         data: { datasets: [] },
         options: {
             ...commonOpts,
@@ -360,16 +532,19 @@ function initCharts() {
     });
     charts.co2 = new Chart(document.getElementById('chart-co2'), {
         type: 'line',
+        plugins: [pauseBandsPlugin],
         data: { datasets: [] },
         options: { ...commonOpts, scales: { ...commonOpts.scales, y: { ...commonOpts.scales.y, title: { display: false } } } },
     });
     charts.temp = new Chart(document.getElementById('chart-temp'), {
         type: 'line',
+        plugins: [pauseBandsPlugin],
         data: { datasets: [] },
         options: { ...commonOpts },
     });
     charts.humidity = new Chart(document.getElementById('chart-humidity'), {
         type: 'line',
+        plugins: [pauseBandsPlugin],
         data: { datasets: [] },
         options: { ...commonOpts },
     });
@@ -448,11 +623,20 @@ async function loadEvolution() {
         return;
     }
 
+    applyPauseInfo(data);
     const start = Date.parse(data.start);
+    evolutionStart = start;
     const haveFlow = !!EVOLUTION.air_flow_ml_min;
     const mode = haveFlow ? 'pct' : 'area';
     const days = (Date.parse(data.latest.utc) - start) / 86400000;
-    note.textContent = `Since ${fmtLocal(data.start)} (day ${days.toFixed(1)}). ` + (haveFlow
+    // time left out (paused + settling) since the start, interpolated across
+    const now = Date.now();
+    const inTest = pauses.filter(p => (p.end == null ? now : p.end + settleMs) > start);
+    const outMs = inTest.reduce((sum, p) => sum
+        + Math.max(0, Math.min(p.end == null ? now : p.end + settleMs, now) - Math.max(p.start, start)), 0);
+    const pauseText = inTest.length
+        ? ` ${inTest.length} pause${inTest.length > 1 ? 's' : ''}, ${fixed(outMs / 3600000, 1)} h left out and interpolated.` : '';
+    note.textContent = `Since ${fmtLocal(data.start)} (day ${days.toFixed(1)}).${pauseText} ` + (haveFlow
         ? `Air flow ${EVOLUTION.air_flow_ml_min} mL/min per vessel; CO2 density ${co2DensityGPerL().toFixed(3)} g/L.`
         : 'Enter the measured air flow per vessel in config.js (EVOLUTION.air_flow_ml_min) to convert to grams of CO2 and % biodegradation.');
 

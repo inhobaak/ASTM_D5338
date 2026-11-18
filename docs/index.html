@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>D5338 · CO₂ Monitor</title>
     <link rel="icon" href="assets/cornell-seal-red.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="style.css?v=8">
+    <link rel="stylesheet" href="style.css?v=9">
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-    <script src="config.js?v=8"></script>
+    <script src="config.js?v=9"></script>
 </head>
 <body>
 
@@ -37,6 +37,22 @@
 </header>
 
 <main>
+    <section class="recording-panel" id="recording-panel" hidden>
+        <div class="rec-state">
+            <span class="rec-dot" aria-hidden="true"></span>
+            <div>
+                <p class="rec-title" id="rec-title">Recording</p>
+                <p class="rec-detail" id="rec-detail">Press Pause before opening a vessel or the cold trap.</p>
+            </div>
+        </div>
+        <form class="rec-form" id="rec-form">
+            <input id="rec-note" type="text" maxlength="200" placeholder="Reason, e.g. ice refill" aria-label="Reason for pausing">
+            <input id="rec-key" type="password" placeholder="Control key" aria-label="Control key" autocomplete="current-password" hidden>
+            <button type="submit" id="rec-button">Pause recording</button>
+        </form>
+        <p class="rec-error" id="rec-error" hidden></p>
+    </section>
+
     <section class="overview-panel">
         <div>
             <p class="section-title">Setup</p>
@@ -68,7 +84,9 @@
     <div class="charts">
         <div class="chart-container chart-container-primary">
             <h3>Net CO<sub>2</sub> (vessel minus blank, ppm)</h3>
-            <p class="chart-note">CO<sub>2</sub> released by the test material: each vessel's exhaust CO<sub>2</sub> minus the blank (compost only), which also removes the room CO<sub>2</sub> in the inlet air.</p>
+            <p class="chart-note">CO<sub>2</sub> released by the test material: each vessel's exhaust CO<sub>2</sub> minus the blank (compost only), which also removes the room CO<sub>2</sub> in the inlet air.
+                <span class="band-key band-key-pause"></span> Paused
+                <span class="band-key band-key-settle"></span> Settling after resume: net CO<sub>2</sub> is hidden there, and the CO<sub>2</sub> evolution is interpolated across it.</p>
             <div class="chart-box"><canvas id="chart-net"></canvas></div>
         </div>
         <div class="chart-container">
@@ -92,6 +110,6 @@
     <p class="footer-note">Each reading is a 30-second average from three SCD-30 sensors, sent to Google Sheets every 30 seconds. Times are US Eastern.</p>
 </footer>
 
-<script src="app.js?v=8"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

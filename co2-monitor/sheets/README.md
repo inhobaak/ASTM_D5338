@@ -61,6 +61,28 @@ at most 45 days.
 If you change `Code.gs` later, use **Deploy → Manage deployments → Edit →
 New version** so the `/exec` URL stays the same.
 
+## Pausing (ice refill, watering)
+
+The dashboard has a **Pause recording** button. Press it before opening a
+vessel or the cold trap, and **Resume recording** once everything is closed.
+
+- The Pico keeps logging raw rows the whole time; nothing is deleted.
+- Each pause is a row in the `pauses` tab (`start_utc`, `end_utc`, `note`).
+- Rows from the start of a pause until `SETTLE_MIN` minutes after it ends are
+  left out of the cumulative CO2. The integral runs straight from the last good
+  row before to the first good row after (linear interpolation).
+- Gray bands on the charts show paused (dark) and settling (light) time.
+
+Script properties:
+
+| Property | Meaning |
+|---|---|
+| `CONTROL_KEY` | Passphrase the dashboard asks for once per browser. Required for the button. |
+| `SETTLE_MIN` | Minutes after a resume still left out (default 15). Use about 3 × headspace volume ÷ air flow, e.g. 0.5 L ÷ 0.1 L/min × 3 = 15 min. |
+
+Forgot to press Pause? Add or fix the row in the `pauses` tab by hand (UTC,
+e.g. `2026-11-20T14:05:00Z`). The totals are recounted on the next upload.
+
 ## settings.toml keys
 
 ```toml
