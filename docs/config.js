@@ -15,7 +15,7 @@ const CO2_OFFSET_PPM = { blank: 0, control: 0, sample: 0 };
 // same air flow, measure it, and enter it here: the blank is subtracted as the
 // baseline, which assumes equal flows.
 const EVOLUTION = {
-    air_flow_ml_min: null,   // measured air flow through each vessel (mL/min)
+    air_flow_ml_min: 100,    // measured air flow through each vessel (mL/min)
     gas_temp_c: 20,          // temperature where the flow is measured
     pressure_kpa: 98.3,      // about 250 m elevation
     materials: {
