@@ -21,6 +21,9 @@ const EVOLUTION = {
     materials: {
         // ThCO2 = mass_g x carbon_fraction x 44.01/12.011
         control: { mass_g: 10, carbon_fraction: 0.444 },   // microcrystalline cellulose (C6H10O5)n
-        sample:  { mass_g: 10, carbon_fraction: null },    // from elemental analysis (CHNS)
+        // Self-healing PU from the recipe: 8 g PPG-2000 + 1.88 mL IPDI (1.972 g)
+        // + 0.5765 g dimethylglyoxime = 6.436 g C in 10.549 g. Replace with
+        // the elemental analysis (CHNS) value when you have it.
+        sample:  { mass_g: 10, carbon_fraction: 0.610 },
     },
 };
