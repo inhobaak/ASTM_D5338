@@ -635,6 +635,11 @@ async function loadEvolution() {
         const ppmMin = data.latest.net_ppm_min[chId];
         const g = co2Grams(ppmMin);
         const th = thCO2(chId);
+        // Early in a test the totals are tiny: show mg and extra decimals so
+        // they don't read as zero
+        const gText = g == null ? null : Math.abs(g) < 1 ? `${fixed(g * 1000, 1)} mg` : `${fixed(g, 3)} g`;
+        const pct = g != null && th ? g / th * 100 : null;
+        const pctText = pct == null ? '-' : `${fixed(pct, Math.abs(pct) < 1 ? 3 : Math.abs(pct) < 10 ? 2 : 1)} %`;
         const div = document.createElement('div');
         div.className = 'evolution-card';
         div.id = `evo-${chId}`;
@@ -642,11 +647,11 @@ async function loadEvolution() {
             <div class="card-role">${escHtml(getChannelRole(chId))}</div>
             <div class="card-name">${escHtml(getChannelLabel({ channel_id: chId }))}</div>
             <div class="metric-row"><span class="metric-label">Net CO<sub>2</sub> evolved</span>
-                <span class="metric-value">${g != null ? `${fixed(g, 3)} g` : `${fixed(ppmMin / 60, 0)} ppm·h`}</span></div>
+                <span class="metric-value">${gText != null ? gText : `${fixed(ppmMin / 60, 0)} ppm·h`}</span></div>
             <div class="metric-row"><span class="metric-label">ThCO<sub>2</sub></span>
                 <span class="metric-value">${th ? `${th.toFixed(2)} g` : 'set mass and carbon'}</span></div>
             <div class="metric-row metric-row-net"><span class="metric-label">Biodegradation</span>
-                <span class="metric-value">${g != null && th ? `${fixed(g / th * 100, 1)} %` : '-'}</span></div>`;
+                <span class="metric-value">${pctText}</span></div>`;
         cards.appendChild(div);
     });
 
